@@ -1,0 +1,265 @@
+{% extends "layout.html" %}
+
+{% block title %}
+    Quoted: {{ quote.symbol }}
+{% endblock %}
+
+{% block main %}
+    <div class="container">
+        <h2 class="mb-2">Market Analysis: {{ quote.name }} ({{ quote.symbol }})</h2>
+        
+        {% if quote.description %}
+            <p class="text-muted mb-4 mx-auto" style="max-width: 800px; font-size: 0.9rem; text-align: justify;">
+                {{ quote.description }}
+            </p>
+        {% else %}
+            <div class="mb-4"></div>
+        {% endif %}
+        
+        <div class="row mb-4">
+            <div class="col-md-4">
+                <div class="card shadow-sm border-0 bg-light">
+                    <div class="card-body text-center">
+                        <small class="text-muted text-uppercase fw-bold">Current Price</small>
+                        <h3 class="display-6 mb-0">{{ quote.price | usd }}</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-8">
+                <div class="row g-3 h-100">
+                    <div class="col-sm-6">
+                        <div class="card shadow-sm border-0 bg-light h-100">
+                            <div class="card-body text-center d-flex flex-column justify-content-center">
+                                <small class="text-muted text-uppercase fw-bold mb-1">Sector</small>
+                                <h5 class="mb-0 text-dark">{{ quote.sector if quote.sector else 'N/A' }}</h5>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-sm-6">
+                        <div class="card shadow-sm border-0 bg-light h-100">
+                            <div class="card-body text-center d-flex flex-column justify-content-center">
+                                <small class="text-muted text-uppercase fw-bold mb-1">Exchange</small>
+                                <h5 class="mb-0 text-dark">{{ quote.exchange if quote.exchange else 'N/A' }}</h5>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {% if news %}
+        <div class="row g-4 mt-2 mb-4">
+            <div class="col-12">
+                <div class="card shadow-sm border-0 overflow-hidden">
+                    <div class="card-header bg-dark text-white py-3">
+                        <h5 class="card-title mb-0 text-white">Latest Market News</h5>
+                    </div>
+                    <div class="list-group list-group-flush" style="max-height: 400px; overflow-y: auto;">
+                        {% for story in news %}
+                        <a href="{{ story.link }}" target="_blank" class="list-group-item list-group-item-action border-0 py-3 d-flex justify-content-between align-items-center">
+                            <div class="pe-3 text-start">
+                                 <h6 class="mb-1 text-primary">{{ story.title }}</h6>
+                                 <small class="text-muted">{{ story.publisher }}</small>
+                            </div>
+                            <small class="text-muted text-nowrap"><i class="bi bi-box-arrow-up-right me-1"></i>Read</small>
+                        </a>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if history %}
+        <div class="row g-4">
+            <!-- Price and Moving Averages Chart -->
+            <div class="col-md-4">
+                <div class="card shadow-sm border-0 h-100">
+                    <div class="card-body">
+                        <h5 class="card-title text-start mb-3">Technical Trends (3M)</h5>
+                        <div id="priceChart" style="width:100%; height:300px;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Rate of Change Chart -->
+            <div class="col-md-4">
+                <div class="card shadow-sm border-0 h-100">
+                    <div class="card-body">
+                        <h5 class="card-title text-start mb-3">7-Day Momentum</h5>
+                        <div id="rocChart" style="width:100%; height:300px;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- RSI Chart -->
+            <div class="col-md-4">
+                <div class="card shadow-sm border-0 h-100">
+                    <div class="card-body">
+                        <h5 class="card-title text-start mb-3">Relative Strength (RSI)</h5>
+                        <div id="rsiChart" style="width:100%; height:300px;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {% if analysis %}
+        <div class="row mt-4">
+            <div class="col-12">
+                <div class="card border-0 bg-light shadow-sm">
+                    <div class="card-body p-4">
+                        <div class="d-flex align-items-center mb-3">
+                            <span class="badge bg-primary me-2"><i class="bi bi-cpu me-1"></i>AI ANALYSIS</span>
+                            <h6 class="card-title text-muted mb-0">Technical Sentiment</h6>
+                        </div>
+                        <p class="small mb-3 fst-italic text-dark report-text">{{ analysis }}</p>
+                        <hr class="my-4">
+                        <div class="alert alert-info border-0 bg-opacity-10 d-flex align-items-center mb-0">
+                            <i class="bi bi-info-circle fs-4 me-3 text-primary"></i>
+                            <span class="small"><span class="fw-bold">Disclaimer:</span> AI-generated educational content. Not advice. Verify independently.</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Plotly scripts -->
+        <script src="https://cdn.plot.ly/plotly-2.32.0.min.js" charset="utf-8"></script>
+        <script>
+            const stockData = {{ history | tojson }};
+            
+            // 1. Price Candlesticks and MAs Chart
+            const traceCandle = {
+                x: stockData.dates,
+                y: stockData.close,
+                type: 'scatter',
+                mode: 'lines',
+                name: 'Price',
+                line: {color: '#198754', width: 2}
+            };
+
+            const traceMA10 = {
+                x: stockData.dates,
+                y: stockData.ma10,
+                type: 'scatter',
+                mode: 'lines',
+                name: '10D MA',
+                line: { color: '#ffc107', width: 1.5, dash: 'dot' }
+            };
+
+            const traceMA20 = {
+                x: stockData.dates,
+                y: stockData.ma20,
+                type: 'scatter',
+                mode: 'lines',
+                name: '20D MA',
+                line: { color: '#0dcaf0', width: 1.5 }
+            };
+
+            const priceLayout = {
+                plot_bgcolor: '#1A1A1A',
+                paper_bgcolor: '#1A1A1A',
+                margin: { l: 50, r: 20, t: 30, b: 50 },
+                hovermode: 'x unified',
+                xaxis: { showgrid: false, zeroline: false, rangeslider: {visible: false}, color: '#B0B0B0' },
+                yaxis: { title: 'Price (USD)', tickformat: '$.2f', color: '#B0B0B0', titlefont: {color: '#B0B0B0'} },
+                legend: { orientation: 'h', y: 1.15, font: {color: '#B0B0B0'} },
+                font: { color: '#B0B0B0' }
+            };
+
+            Plotly.newPlot('priceChart', [traceCandle, traceMA10, traceMA20], priceLayout, {responsive: true});
+
+            // 2. ROC Chart (Bar Chart with Green/Red colors)
+            const colors = stockData.roc7.map(val => val >= 0 ? '#198754' : '#dc3545');
+
+            const traceROC = {
+                x: stockData.dates,
+                y: stockData.roc7,
+                type: 'bar',
+                name: '7D ROC',
+                marker: { color: colors }
+            };
+
+            const traceROCSignal = {
+                x: stockData.dates,
+                y: stockData.roc7_ma7,
+                type: 'scatter',
+                mode: 'lines',
+                name: 'Signal (7D MA)',
+                line: { color: '#B0B0B0', width: 1.5, dash: 'dot' }
+            };
+
+            const rocLayout = {
+                plot_bgcolor: '#1A1A1A',
+                paper_bgcolor: '#1A1A1A',
+                margin: { l: 50, r: 20, t: 10, b: 50 },
+                hovermode: 'x unified',
+                xaxis: { showgrid: false, zeroline: false, color: '#B0B0B0' },
+                yaxis: { title: 'Change (%)', zeroline: true, zerolinewidth: 2, zerolinecolor: '#444', color: '#B0B0B0', titlefont: {color: '#B0B0B0'} },
+                showlegend: false,
+                font: { color: '#B0B0B0' }
+            };
+
+            Plotly.newPlot('rocChart', [traceROC, traceROCSignal], rocLayout, {displayModeBar: false, responsive: true});
+
+            // 3. RSI Chart
+            const traceRSI = {
+                x: stockData.dates,
+                y: stockData.rsi,
+                type: 'scatter',
+                mode: 'lines',
+                name: 'RSI',
+                line: { color: '#6f42c1', width: 2 },
+                fill: 'none'
+            };
+
+            const rsiLayout = {
+                plot_bgcolor: '#1A1A1A',
+                paper_bgcolor: '#1A1A1A',
+                margin: { l: 40, r: 20, t: 10, b: 40 },
+                hovermode: 'x unified',
+                xaxis: { showgrid: false, color: '#B0B0B0' },
+                yaxis: { 
+                    range: [0, 100], 
+                    showgrid: true,
+                    tickvals: [30, 50, 70],
+                    gridcolor: '#333333',
+                    color: '#B0B0B0',
+                    titlefont: {color: '#B0B0B0'}
+                },
+                shapes: [
+                    { type: 'line', y0: 70, y1: 70, x0: stockData.dates[0], x1: stockData.dates[stockData.dates.length-1], line: { color: '#ffc107', width: 1, dash: 'dot'} },
+                    { type: 'line', y0: 50, y1: 50, x0: stockData.dates[0], x1: stockData.dates[stockData.dates.length-1], line: { color: '#6c757d', width: 1, dash: 'dot'} },
+                    { type: 'line', y0: 30, y1: 30, x0: stockData.dates[0], x1: stockData.dates[stockData.dates.length-1], line: { color: '#20c997', width: 1, dash: 'dot'} }
+                ],
+                font: { color: '#B0B0B0' }
+            };
+
+            Plotly.newPlot('rsiChart', [traceRSI], rsiLayout, {displayModeBar: false, responsive: true});
+        </script>
+        <style>
+            .report-text {
+                line-height: 1.6;
+                font-family: 'Inter', sans-serif;
+                white-space: pre-line;
+                color: #FFFFFF !important;
+            }
+            .card-title {
+                font-weight: 700;
+                color: #FFFFFF !important;
+                font-size: 0.95rem;
+                letter-spacing: 0.5px;
+            }
+        </style>
+        {% else %}
+        <div class="alert alert-warning">
+            Unable to render technical charts for this symbol at this time.
+        </div>
+        {% endif %}
+
+        <div class="mt-4">
+             <a href="/quote" class="btn btn-outline-secondary">Back to Quote</a>
+        </div>
+    </div>
+{% endblock %}
