@@ -1,0 +1,14 @@
+{% extends "layout.html" %}
+
+{% block title %}
+    Apology
+{% endblock %}
+
+{% block main %}
+    <div class="alert alert-danger mx-auto w-50" role="alert">
+        <h4 class="alert-heading">{{ top }}</h4>
+        <p>{{ bottom }}</p>
+        <hr>
+        <p class="mb-0">Please go back and try again.</p>
+    </div>
+{% endblock %}

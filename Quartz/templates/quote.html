@@ -1,0 +1,15 @@
+{% extends "layout.html" %}
+
+{% block title %}
+Quote
+{% endblock %}
+
+{% block main %}
+    <h2 class="text-gold">Asset Analysis</h2>
+    <form action="/quote" method="POST">
+        <div class="mb-4 mx-auto" style="max-width: 600px;">
+            <input name="symbol" class="form-control" placeholder="Enter Symbol or Name" list="symbols" autocomplete="off" autofocus required>
+        </div>
+        <button class="btn btn-primary" type="submit">Analyze</button>
+    </form>
+{% endblock %}
