@@ -9,7 +9,6 @@ from flask_session import Session
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from helpers import apology, get_history, get_llm_analysis, get_news, login_required, lookup, usd, search_symbol
-from database import db  # <--- THIS IS THE ONLY CHANGE! Import from database.py instead of creating db
 
 # API Configuration
 os.environ["GROQ_API_KEY"] = os.environ.get("GROQ_API_KEY", "")
@@ -87,6 +86,8 @@ if os.path.exists(".env"):
             if "=" in line and not line.strip().startswith("#"):
                 key, value = line.strip().split("=", 1)
                 os.environ[key.strip()] = value.strip().strip("'").strip('"')
+
+from database import db
 
 # Configure application
 app = Flask(__name__)
