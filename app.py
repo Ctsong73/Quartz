@@ -111,6 +111,8 @@ def get_baseline_nlv(history_rows, days, max_days=None, fallback_value=None, tod
 
     for row in reversed(history_rows):
         row_date = row.get("date")
+        if isinstance(row_date, date):
+            row_date = row_date.isoformat()
         if row_date and row_date <= cutoff_start:
             if cutoff_end and row_date < cutoff_end:
                 continue
