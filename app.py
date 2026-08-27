@@ -116,7 +116,7 @@ def get_baseline_nlv(history_rows, days, max_days=None, fallback_value=None, tod
         if row_date and row_date <= cutoff_start:
             if cutoff_end and row_date < cutoff_end:
                 continue
-            return row["nlv"]
+            return float(row["nlv"])
 
     if fallback_value is not None:
         return fallback_value
@@ -172,7 +172,8 @@ def index():
         else:
             cost_data = {"total_cost": 0, "total_shares": 0}
             
-        avg_cost = cost_data["total_cost"] / cost_data["total_shares"] if cost_data["total_shares"] and cost_data["total_shares"] > 0 else 0
+        avg_cost = (float(cost_data["total_cost"]) / float(cost_data["total_shares"])
+                if cost_data["total_shares"] and cost_data["total_shares"] > 0 else 0)
         
         if quote:
             price = quote["price"]
