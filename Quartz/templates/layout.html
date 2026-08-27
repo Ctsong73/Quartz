@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+    <head>
+
+        <meta charset="utf-8">
+        <meta name="viewport" content="initial-scale=1, width=device-width">
+
+        <!-- http://getbootstrap.com/docs/5.3/ -->
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
+
+        <!-- Custom Quartz Favicon -->
+        <link href="/static/favicon.png" rel="icon" type="image/png">
+
+        <link href="/static/styles.css" rel="stylesheet">
+
+        <title>Quartz: {% block title %}{% endblock %}</title>
+
+    </head>
+
+    <body>
+
+        <nav class="bg-light border navbar navbar-expand-md navbar-light">
+            <div class="container-fluid align-items-center">
+                <a class="navbar-brand d-flex align-items-center me-3" href="{{ '/portfolio' if session.get('user_id') else '/' }}">
+                    <img src="/static/logo_dark.png" alt="Quartz Logo" height="110" class="d-inline-block align-top quartz-logo">
+                </a>
+
+                {% if request.path in ['/', '/login'] %}
+                <!-- Market Ticker Widget Beside Logo (Homepage Only) -->
+                <div class="market-ticker-container me-auto d-none d-lg-flex flex-column gap-2" id="market-ticker-widget">
+                    <!-- Row 1: DJIA, GOLD, OIL, BTC, US10Y -->
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="ticker-pill">
+                            <span class="ticker-label">DJIA</span>
+                            <span id="ticker-djia" class="d-flex align-items-center">
+                                <span class="ticker-price text-white-50">...</span>
+                            </span>
+                        </div>
+                        <div class="ticker-pill">
+                            <span class="ticker-label">GOLD</span>
+                            <span id="ticker-gold" class="d-flex align-items-center">
+                                <span class="ticker-price text-white-50">...</span>
+                            </span>
+                        </div>
+                        <div class="ticker-pill">
+                            <span class="ticker-label">OIL</span>
+                            <span id="ticker-oil" class="d-flex align-items-center">
+                                <span class="ticker-price text-white-50">...</span>
+                            </span>
+                        </div>
+                        <div class="ticker-pill">
+                            <span class="ticker-label">BTC</span>
+                            <span id="ticker-btc" class="d-flex align-items-center">
+                                <span class="ticker-price text-white-50">...</span>
+                            </span>
+                        </div>
+                        <div class="ticker-pill">
+                            <span class="ticker-label">US10Y</span>
+                            <span id="ticker-tnx" class="d-flex align-items-center">
+                                <span class="ticker-price text-white-50">...</span>
+                            </span>
+                        </div>
+                    </div>
+                    <!-- Row 2: NSQ, COPPER, PALM, NVDA, JP10Y -->
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="ticker-pill">
+                            <span class="ticker-label">NSQ</span>
+                            <span id="ticker-nasdaq" class="d-flex align-items-center">
+                                <span class="ticker-price text-white-50">...</span>
+                            </span>
+                        </div>
+                        <div class="ticker-pill">
+                            <span class="ticker-label">COPPER</span>
+                            <span id="ticker-copper" class="d-flex align-items-center">
+                                <span class="ticker-price text-white-50">...</span>
+                            </span>
+                        </div>
+                        <div class="ticker-pill">
+                            <span class="ticker-label">PALM</span>
+                            <span id="ticker-palmoil" class="d-flex align-items-center">
+                                <span class="ticker-price text-white-50">...</span>
+                            </span>
+                        </div>
+                        <div class="ticker-pill">
+                            <span class="ticker-label">NVDA</span>
+                            <span id="ticker-nvidia" class="d-flex align-items-center">
+                                <span class="ticker-price text-white-50">...</span>
+                            </span>
+                        </div>
+                        <div class="ticker-pill">
+                            <span class="ticker-label">JP10Y</span>
+                            <span id="ticker-japan10y" class="d-flex align-items-center">
+                                <span class="ticker-price text-white-50">...</span>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+
+                <button aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation" class="navbar-toggler" data-bs-target="#navbar" data-bs-toggle="collapse" type="button">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <div class="collapse navbar-collapse" id="navbar">
+                    {% if session["user_id"] %}
+                        <ul class="navbar-nav ms-auto mt-2">
+                            <li class="nav-item"><a class="nav-link" href="/quote">Quote</a></li>
+                            <li class="nav-item"><a class="nav-link" href="/buy">Buy</a></li>
+                            <li class="nav-item"><a class="nav-link" href="/sell">Sell</a></li>
+                            <li class="nav-item"><a class="nav-link" href="/history">History</a></li>
+                            <li class="nav-item"><a class="nav-link" href="/portfolio">Portfolio</a></li>
+                        </ul>
+                        <ul class="navbar-nav ms-auto mt-2">
+                            <li class="nav-item"><a class="nav-link" href="/logout">Log Out</a></li>
+                        </ul>
+                    {% else %}
+                        <ul class="navbar-nav ms-auto mt-2">
+                            <li class="nav-item"><a class="nav-link" href="/register">Register</a></li>
+                            <li class="nav-item"><a class="nav-link" href="/login">Log In</a></li>
+                        </ul>
+                    {% endif %}
+                </div>
+            </div>
+        </nav>
+
+        {% if get_flashed_messages() %}
+            <header>
+                <div class="alert alert-warning mb-0 text-center" role="alert">
+                    {{ get_flashed_messages() | join(" ") }}
+                </div>
+            </header>
+        {% endif %}
+
+        <main class="container py-5 text-center">
+            {% block main %}{% endblock %}
+        </main>
+
+        <footer class="mt-5 py-4 border-top">
+            <div class="container text-center">
+                <p class="text-muted small mb-0">&copy; 2026 Quartz. All rights reserved.</p>
+                <p class="text-muted extra-small" style="font-size: 0.7rem;">Risk-free execution. Smarter trading. Genuine mastery.</p>
+            </div>
+        </footer>
+
+        <!-- Global Symbol Autocomplete Component -->
+        <datalist id="symbols"></datalist>
+        <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                const widget = document.getElementById('market-ticker-widget');
+                if (widget) {
+                    // Live Market Ticker Loader (Homepage Only)
+                    async function updateMarketTicker() {
+                        try {
+                            const res = await fetch('/api/market_ticker');
+                            if (!res.ok) return;
+                            const data = await res.json();
+                            
+                            function updateItem(id, itemData, prefix = '', suffix = '') {
+                                if (!itemData) return;
+                                const price = itemData.price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                                const pct = itemData.pct.toFixed(2);
+                                const isPos = itemData.pct >= 0;
+                                const color = isPos ? 'text-success' : 'text-danger';
+                                const sign = isPos ? '+' : '';
+                                const elem = document.getElementById(id);
+                                if (elem) {
+                                    elem.innerHTML = `
+                                        <span class="ticker-price">${prefix}${price}${suffix}</span>
+                                        <span class="ticker-change ${color}">(${sign}${pct}%)</span>
+                                    `;
+                                }
+                            }
+
+                            // Row 1
+                            updateItem('ticker-djia', data.DJIA, '');
+                            updateItem('ticker-gold', data.Gold, '$');
+                            updateItem('ticker-oil', data.Oil, '$');
+                            updateItem('ticker-btc', data.BTC, '$');
+                            updateItem('ticker-tnx', data.TNX, '', '%');
+
+                            // Row 2
+                            updateItem('ticker-nasdaq', data.Nasdaq, '');
+                            updateItem('ticker-copper', data.Copper, '$');
+                            updateItem('ticker-palmoil', data.PalmOil, '$');
+                            updateItem('ticker-nvidia', data.Nvidia, '$');
+                            updateItem('ticker-japan10y', data.Japan10Y, '¥');
+                        } catch (e) {
+                            console.error('Error loading market ticker:', e);
+                        }
+                    }
+                    updateMarketTicker();
+                    setInterval(updateMarketTicker, 30000);
+                }
+
+                const datalist = document.getElementById('symbols');
+                let timeout = null;
+                
+                document.querySelectorAll('input[list="symbols"]').forEach(input => {
+                    input.addEventListener('input', function() {
+                        clearTimeout(timeout);
+                        const query = this.value;
+                        
+                        const options = Array.from(datalist.options);
+                        if (options.some(opt => opt.value === query)) return;
+                        
+                        if (query.length < 2) return;
+                        
+                        timeout = setTimeout(async () => {
+                            try {
+                                const response = await fetch(`/search?q=${encodeURIComponent(query)}`);
+                                if (!response.ok) return;
+                                
+                                const data = await response.json();
+                                datalist.innerHTML = '';
+                                
+                                data.forEach(item => {
+                                    const option = document.createElement('option');
+                                    option.value = item.symbol;
+                                    option.textContent = `${item.name} (${item.exchange})`;
+                                    datalist.appendChild(option);
+                                });
+                            } catch (e) {
+                                console.error('Error fetching symbols:', e);
+                            }
+                        }, 300);
+                    });
+                });
+            });
+        </script>
+
+    </body>
+
+</html>
