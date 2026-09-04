@@ -185,7 +185,7 @@
                             updateItem('ticker-copper', data.Copper, '$');
                             updateItem('ticker-palmoil', data.PalmOil, '$');
                             updateItem('ticker-nvidia', data.Nvidia, '$');
-                            updateItem('ticker-japan10y', data.Japan10Y, '¥');
+                            updateItem('ticker-japan10y', data.Japan10Y, '', '%');
                         } catch (e) {
                             console.error('Error loading market ticker:', e);
                         }

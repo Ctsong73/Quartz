@@ -25,6 +25,38 @@ os.environ["GROQ_API_KEY"] = os.environ.get("GROQ_API_KEY", "")
 
 _ticker_cache = {"timestamp": 0, "data": {}}
 
+def _get_japan_10y_yield():
+    """Fetch official Japan 10-Year Government Bond Yield (%) from Ministry of Finance Japan."""
+    try:
+        url = "https://www.mof.go.jp/english/jgbs/reference/interest_rate/jgbcme.csv"
+        resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        if resp.status_code == 200:
+            lines = [line.strip() for line in resp.text.split('\n') if line.strip()]
+            data_rows = []
+            for line in lines:
+                parts = line.split(',')
+                if len(parts) >= 11 and parts[0].replace('/', '').replace('-', '').isdigit():
+                    try:
+                        date_str = parts[0]
+                        yield_10y = float(parts[10])
+                        data_rows.append((date_str, yield_10y))
+                    except ValueError:
+                        continue
+            if len(data_rows) >= 1:
+                latest_yield = data_rows[-1][1]
+                prev_yield = data_rows[-2][1] if len(data_rows) >= 2 else latest_yield
+                change = latest_yield - prev_yield
+                pct = (change / prev_yield * 100) if prev_yield != 0 else 0.0
+                return {
+                    "price": latest_yield,
+                    "change": change,
+                    "pct": pct,
+                    "symbol": "MOF JGB 10Y"
+                }
+    except Exception as e:
+        logger.warning(f"MOF JGB 10Y yield fetch failed: {e}")
+    return None
+
 def _get_market_tickers_yfinance():
     """Fetch market ticker data via yfinance (works locally, often blocked on cloud)."""
     tickers = {
@@ -40,7 +72,15 @@ def _get_market_tickers_yfinance():
         "Japan10Y": "2561.T"
     }
     results = {}
+
+    # Primary: try official Ministry of Finance Japan JGB 10Y Yield (%)
+    jgb_yield = _get_japan_10y_yield()
+    if jgb_yield:
+        results["Japan10Y"] = jgb_yield
+
     for name, sym in tickers.items():
+        if name in results:
+            continue
         try:
             t = yf.Ticker(sym)
             # Fetch 5d to ensure valid close prices even across weekends and holidays
