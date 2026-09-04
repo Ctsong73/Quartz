@@ -4,6 +4,7 @@ import math
 import time
 import traceback
 import requests
+import threading
 
 # Configure basic logging
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s in %(module)s: %(message)s')
@@ -189,6 +190,24 @@ def get_market_tickers():
     return results or _ticker_cache["data"]
 
 from database import db
+
+def _start_supabase_keepalive():
+    """Background daemon thread to ping Supabase PostgreSQL every 12 hours."""
+    def keepalive_loop():
+        logger.info("Supabase keep-alive background thread initialized.")
+        while True:
+            # Wait 12 hours (43200 seconds) between database pings
+            time.sleep(43200)
+            try:
+                result = db.execute("SELECT 1 AS keepalive")
+                logger.info(f"Supabase keep-alive ping executed successfully: {result}")
+            except Exception as e:
+                logger.warning(f"Supabase keep-alive ping encountered issue: {e}")
+
+    thread = threading.Thread(target=keepalive_loop, daemon=True, name="supabase-keepalive")
+    thread.start()
+
+_start_supabase_keepalive()
 
 # Configure application
 app = Flask(__name__)
@@ -583,6 +602,20 @@ def health():
     }
     
     return jsonify(status)
+
+@app.route("/ping")
+def ping():
+    """Lightweight ping endpoint to wake Render and keep Supabase PostgreSQL active."""
+    try:
+        db.execute("SELECT 1 AS keepalive")
+        return jsonify({
+            "status": "active",
+            "database": "pinged",
+            "timestamp": time.time()
+        })
+    except Exception as e:
+        logger.error(f"Ping endpoint error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
