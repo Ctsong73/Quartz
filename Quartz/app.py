@@ -398,23 +398,23 @@ def buy():
             if not quote:
                 return apology("invalid symbol", 400)
 
-            price = quote["price"]
+            price = float(quote["price"])
             user_id = session["user_id"]
-            user_cash = db.execute("SELECT cash FROM users WHERE id = ?", user_id)[0]["cash"]
+            user_cash = float(db.execute("SELECT cash FROM users WHERE id = ?", user_id)[0]["cash"])
 
             holdings = db.execute("SELECT symbol, shares FROM portfolio WHERE user_id = ?", user_id)
             current_shares = 0
-            total_short_liability = 0
+            total_short_liability = 0.0
             nlv = user_cash
             
             for h in holdings:
                 sym = h["symbol"]
-                s = h["shares"]
+                s = int(h["shares"])
                 if sym == symbol:
                     current_shares = s
                 q = lookup(sym)
                 if q:
-                    p = q["price"]
+                    p = float(q["price"])
                     nlv += p * s
                     if s < 0:
                         total_short_liability += abs(p * s)
@@ -450,8 +450,7 @@ def buy():
             flash("Bought")
             return redirect("/portfolio")
         except Exception as e:
-            print("Error:", e)
-            traceback.print_exc()
+            logger.error(f"Buy error: {e}", exc_info=True)
             return apology("Something went wrong", 500)
 
     return render_template("buy.html")
@@ -620,73 +619,77 @@ def sell():
     user_id = session["user_id"]
 
     if request.method == "POST":
-        symbol = request.form.get("symbol")
-        shares = request.form.get("shares")
-
-        if not symbol or not shares:
-            return apology("Please provide symbol and shares", 400)
-
         try:
-            shares = int(shares)
-            if shares <= 0:
-                return apology("shares must be more than 0", 400)
-        except ValueError:
-            return apology("shares must be a number", 400)
+            symbol = request.form.get("symbol")
+            shares = request.form.get("shares")
 
-        symbol = symbol.upper()
-        quote = lookup(symbol)
-        if not quote:
-            return apology("invalid symbol", 400)
-        price = quote["price"]
+            if not symbol or not shares:
+                return apology("Please provide symbol and shares", 400)
 
-        user_cash = db.execute("SELECT cash FROM users WHERE id = ?", user_id)[0]["cash"]
-        holdings = db.execute("SELECT symbol, shares FROM portfolio WHERE user_id = ?", user_id)
-        
-        current_shares = 0
-        total_short_liability = 0
-        nlv = user_cash
-        
-        for h in holdings:
-            sym = h["symbol"]
-            s = h["shares"]
-            if sym == symbol:
-                current_shares = s
-            q = lookup(sym)
-            if q:
-                p = q["price"]
-                nlv += p * s
-                if s < 0:
-                    total_short_liability += abs(p * s)
+            try:
+                shares = int(shares)
+                if shares <= 0:
+                    return apology("shares must be more than 0", 400)
+            except ValueError:
+                return apology("shares must be a number", 400)
 
-        c_current = user_cash
-        s_current = total_short_liability
-        cost = -price * shares
-        c_after = c_current - cost
-        new_shares = current_shares - shares
-        
-        s_after = s_current
-        if current_shares < 0:
-            s_after -= abs(current_shares) * price
-        if new_shares < 0:
-            s_after += abs(new_shares) * price
+            symbol = symbol.upper()
+            quote = lookup(symbol)
+            if not quote:
+                return apology("invalid symbol", 400)
+            price = float(quote["price"])
+
+            user_cash = float(db.execute("SELECT cash FROM users WHERE id = ?", user_id)[0]["cash"])
+            holdings = db.execute("SELECT symbol, shares FROM portfolio WHERE user_id = ?", user_id)
             
-        if c_after < s_after and (c_after - s_after) < (c_current - s_current):
-            return apology("insufficient cash for margin requirement", 400)
-        if s_after > nlv and s_after > s_current:
-            return apology("short value exceeds net liquidation value", 400)
+            current_shares = 0
+            total_short_liability = 0.0
+            nlv = user_cash
+            
+            for h in holdings:
+                sym = h["symbol"]
+                s = int(h["shares"])
+                if sym == symbol:
+                    current_shares = s
+                q = lookup(sym)
+                if q:
+                    p = float(q["price"])
+                    nlv += p * s
+                    if s < 0:
+                        total_short_liability += abs(p * s)
 
-        db.execute("UPDATE users SET cash = ? WHERE id = ?", c_after, user_id)
-        db.execute("INSERT INTO transactions (user_id, symbol, shares, price, type) VALUES (?, ?, ?, ?, 'sell')",
-                   user_id, symbol, shares, price)
+            c_current = user_cash
+            s_current = total_short_liability
+            cost = -price * shares
+            c_after = c_current - cost
+            new_shares = current_shares - shares
+            
+            s_after = s_current
+            if current_shares < 0:
+                s_after -= abs(current_shares) * price
+            if new_shares < 0:
+                s_after += abs(new_shares) * price
+                
+            if c_after < s_after and (c_after - s_after) < (c_current - s_current):
+                return apology("insufficient cash for margin requirement", 400)
+            if s_after > nlv and s_after > s_current:
+                return apology("short value exceeds net liquidation value", 400)
 
-        if current_shares != 0 or len([h for h in holdings if h["symbol"] == symbol]) > 0:
-            db.execute("UPDATE portfolio SET shares = ? WHERE user_id = ? AND symbol = ?", new_shares, user_id, symbol)
-        else:
-            db.execute("INSERT INTO portfolio (user_id, symbol, shares) VALUES (?, ?, ?)", user_id, symbol, -shares)
+            db.execute("UPDATE users SET cash = ? WHERE id = ?", c_after, user_id)
+            db.execute("INSERT INTO transactions (user_id, symbol, shares, price, type) VALUES (?, ?, ?, ?, 'sell')",
+                       user_id, symbol, shares, price)
 
-        db.execute("DELETE FROM portfolio WHERE user_id = ? AND shares = 0", user_id)
-        flash("Sold!")
-        return redirect("/portfolio")
+            if current_shares != 0 or len([h for h in holdings if h["symbol"] == symbol]) > 0:
+                db.execute("UPDATE portfolio SET shares = ? WHERE user_id = ? AND symbol = ?", new_shares, user_id, symbol)
+            else:
+                db.execute("INSERT INTO portfolio (user_id, symbol, shares) VALUES (?, ?, ?)", user_id, symbol, -shares)
+
+            db.execute("DELETE FROM portfolio WHERE user_id = ? AND shares = 0", user_id)
+            flash("Sold!")
+            return redirect("/portfolio")
+        except Exception as e:
+            logger.error(f"Sell error: {e}", exc_info=True)
+            return apology("Something went wrong", 500)
 
     return render_template("sell.html")
 
