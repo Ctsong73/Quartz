@@ -1,27 +1,31 @@
 import os
+import logging
+import math
 import time
 import traceback
-import webbrowser
+import requests
+
+# Configure basic logging
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s in %(module)s: %(message)s')
+logger = logging.getLogger(__name__)
+
 import yfinance as yf
 from datetime import date, timedelta
 from flask import Flask, flash, redirect, render_template, request, session, jsonify
-from flask_session import Session
 from werkzeug.security import check_password_hash, generate_password_hash
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from helpers import apology, get_history, get_llm_analysis, get_news, login_required, lookup, usd, search_symbol
 
 # API Configuration
 os.environ["GROQ_API_KEY"] = os.environ.get("GROQ_API_KEY", "")
 
-import math
-
 _ticker_cache = {"timestamp": 0, "data": {}}
 
-def get_market_tickers():
-    now = time.time()
-    if now - _ticker_cache["timestamp"] < 30 and _ticker_cache["data"]:
-        return _ticker_cache["data"]
-        
+def _get_market_tickers_yfinance():
+    """Fetch market ticker data via yfinance (works locally, often blocked on cloud)."""
     tickers = {
         "DJIA": "^DJI",
         "Gold": "GC=F",
@@ -71,31 +75,144 @@ def get_market_tickers():
                     "symbol": sym
                 }
         except Exception as e:
-            print(f"Error fetching ticker {sym}: {e}")
-            
+            logger.warning(f"yfinance ticker {sym}: {e}")
+    return results
+
+
+def _get_market_tickers_fmp():
+    """Fallback: Fetch market tickers via Financial Modeling Prep (works on cloud servers)."""
+    fmp_key = os.environ.get("FMP_API_KEY", "")
+    if not fmp_key:
+        return {}
+    
+    # FMP uses standard symbols — map display names to FMP symbols
+    tickers = {
+        "DJIA": "^DJI",
+        "Gold": "GC=F",
+        "Oil": "CL=F",
+        "BTC": "BTCUSD",
+        "TNX": "^TNX",
+        "Nasdaq": "^IXIC",
+        "Copper": "HG=F",
+        "PalmOil": "CPO=F",
+        "Nvidia": "NVDA",
+        "Japan10Y": "2561.T"
+    }
+    results = {}
+    
+    # FMP allows batch quotes — try to fetch all at once
+    try:
+        # Batch quote for standard symbols that FMP supports well
+        fmp_batch = ["NVDA"]  # Start with simple stocks
+        batch_sym = ",".join(fmp_batch)
+        url = f"https://financialmodelingprep.com/stable/quote/{batch_sym}"
+        resp = requests.get(url, params={"apikey": fmp_key}, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, list):
+                for q in data:
+                    sym = q.get("symbol", "")
+                    price = q.get("price")
+                    prev = q.get("previousClose", price)
+                    if price:
+                        # Map FMP symbol back to display name
+                        for dname, tsym in tickers.items():
+                            if sym.upper() == tsym.upper() or (dname == "Nvidia" and sym == "NVDA"):
+                                change = price - prev if prev else 0
+                                pct = (change / prev * 100) if prev and prev != 0 else 0
+                                results[dname] = {
+                                    "price": float(price),
+                                    "change": float(change),
+                                    "pct": float(pct),
+                                    "symbol": tsym
+                                }
+    except Exception as e:
+        logger.warning(f"FMP batch ticker fetch failed: {e}")
+    
+    # Try individual fetches for remaining key symbols
+    fmp_individual = {
+        "DJIA": "^DJI",
+        "Gold": "GCUSD",
+        "Oil": "CLUSD",
+        "BTC": "BTCUSD",
+        "Nasdaq": "^IXIC",
+    }
+    for name, sym in fmp_individual.items():
+        if name in results:
+            continue
+        try:
+            url = f"https://financialmodelingprep.com/stable/quote/{sym}"
+            resp = requests.get(url, params={"apikey": fmp_key}, timeout=8)
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, list) and data:
+                    q = data[0]
+                    price = q.get("price")
+                    prev = q.get("previousClose", price)
+                    if price:
+                        change = price - prev if prev else 0
+                        pct = (change / prev * 100) if prev and prev != 0 else 0
+                        results[name] = {
+                            "price": float(price),
+                            "change": float(change),
+                            "pct": float(pct),
+                            "symbol": tickers.get(name, sym)
+                        }
+        except Exception as e:
+            logger.warning(f"FMP individual ticker {sym}: {e}")
+    
+    return results
+
+
+def get_market_tickers():
+    """Get market ticker data. Tries yfinance first, falls back to FMP."""
+    now = time.time()
+    if now - _ticker_cache["timestamp"] < 30 and _ticker_cache["data"]:
+        return _ticker_cache["data"]
+    
+    # Try yfinance first
+    results = _get_market_tickers_yfinance()
+    
+    # If yfinance returned very few results, try FMP as supplement/replacement
+    if len(results) < 3:
+        logger.info(f"yfinance returned only {len(results)} tickers, trying FMP fallback.")
+        fmp_results = _get_market_tickers_fmp()
+        # Merge: FMP fills gaps, yfinance takes priority where both exist
+        for k, v in fmp_results.items():
+            if k not in results:
+                results[k] = v
+    
     if results:
         _ticker_cache["timestamp"] = now
         _ticker_cache["data"] = results
         
     return results or _ticker_cache["data"]
 
-# Load environment variables
-if os.path.exists(".env"):
-    with open(".env") as f:
-        for line in f:
-            if "=" in line and not line.strip().startswith("#"):
-                key, value = line.strip().split("=", 1)
-                os.environ[key.strip()] = value.strip().strip("'").strip('"')
-
 from database import db
 
 # Configure application
 app = Flask(__name__)
 
-# Configure session
+# SECRET_KEY: Use env var in production; generate a stable fallback if missing
+import secrets
+secret_key = os.environ.get("SECRET_KEY")
+if not secret_key:
+    if os.environ.get("RENDER") or os.environ.get("FLASK_ENV") == "production":
+        # On Render without SECRET_KEY: generate one and warn (sessions won't survive redeploy)
+        secret_key = secrets.token_hex(32)
+        logger.warning("SECRET_KEY not set! Generated a random one — sessions will not persist across deploys. Set SECRET_KEY in Render environment variables.")
+    else:
+        secret_key = "local-development-only"
+app.config["SECRET_KEY"] = secret_key
+
+# Configure session — use Flask's default signed-cookie sessions (no filesystem needed)
 app.config["SESSION_PERMANENT"] = False
-app.config["SESSION_TYPE"] = "filesystem"
-Session(app)
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
+# Only enforce Secure cookies on actual HTTPS (Render provides HTTPS automatically)
+is_production = bool(os.environ.get("RENDER") or os.environ.get("FLASK_ENV") == "production")
+app.config["SESSION_COOKIE_SECURE"] = is_production
 
 # Custom filter
 app.jinja_env.filters["usd"] = usd
@@ -420,6 +537,54 @@ def market_ticker():
     data = get_market_tickers()
     return jsonify(data)
 
+@app.route("/health")
+def health():
+    """Health check endpoint for debugging deployment issues."""
+    status = {"status": "ok", "database": "unknown", "yfinance": "unknown", "fmp": "unknown"}
+    
+    # Test database connection
+    try:
+        result = db.execute("SELECT 1 AS test")
+        status["database"] = "connected" if result else "empty_result"
+    except Exception as e:
+        status["database"] = f"error: {str(e)}"
+    
+    # Test yfinance
+    try:
+        t = yf.Ticker("AAPL")
+        h = t.history(period="1d")
+        status["yfinance"] = "working" if not h.empty else "blocked"
+    except Exception as e:
+        status["yfinance"] = f"blocked: {str(e)[:100]}"
+    
+    # Test FMP
+    fmp_key = os.environ.get("FMP_API_KEY", "")
+    if fmp_key:
+        try:
+            resp = requests.get(
+                "https://financialmodelingprep.com/stable/quote/AAPL",
+                params={"apikey": fmp_key}, timeout=10
+            )
+            if resp.status_code == 200 and resp.json():
+                status["fmp"] = "working"
+            else:
+                status["fmp"] = f"error: HTTP {resp.status_code}"
+        except Exception as e:
+            status["fmp"] = f"error: {str(e)[:100]}"
+    else:
+        status["fmp"] = "no_api_key"
+    
+    # Environment check
+    status["env"] = {
+        "RENDER": bool(os.environ.get("RENDER")),
+        "DATABASE_URL": bool(os.environ.get("DATABASE_URL")),
+        "SECRET_KEY": bool(os.environ.get("SECRET_KEY")),
+        "FMP_API_KEY": bool(fmp_key),
+        "GROQ_API_KEY": bool(os.environ.get("GROQ_API_KEY")),
+    }
+    
+    return jsonify(status)
+
 @app.route("/register", methods=["GET", "POST"])
 def register():
     """Register user"""
@@ -556,6 +721,7 @@ def reset_password():
 
 if __name__ == "__main__":
     # Open browser automatically (only in the main process, not the Werkzeug reloader child)
+    import webbrowser
     if not os.environ.get("WERKZEUG_RUN_MAIN"):
         webbrowser.open("http://localhost:5000")
     app.run(debug=True)

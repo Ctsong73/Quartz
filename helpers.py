@@ -1,8 +1,12 @@
 import yfinance as yf
 import math
+import os
+import logging
 
 from flask import redirect, render_template, session
 from functools import wraps
+
+logger = logging.getLogger(__name__)
 
 
 def apology(message, code=400):
@@ -47,73 +51,153 @@ def login_required(f):
 
 
 
-def lookup(symbol):
-    """Look up quote for symbol."""
-    try:
-        ticker = yf.Ticker(symbol)
-        
-        # Get historical data for the latest price as well as 7d and 30d performance
-        data = ticker.history(period="1mo")
-        closes = []
-        if not data.empty:
-            data = data.dropna(subset=['Close'])
-            closes = [float(c) for c in data['Close'] if not math.isnan(c)]
+def _lookup_yfinance(symbol):
+    """Try to look up a quote using yfinance (works locally, often blocked on cloud servers)."""
+    ticker = yf.Ticker(symbol)
+    
+    # Get historical data for the latest price as well as 7d and 30d performance
+    data = ticker.history(period="1mo")
+    closes = []
+    if not data.empty:
+        data = data.dropna(subset=['Close'])
+        closes = [float(c) for c in data['Close'] if not math.isnan(c)]
 
-        if closes:
-            latest_price = closes[-1]
-            price_30d = closes[0]
-            price_7d = closes[-6] if len(closes) >= 6 else closes[0]
+    if closes:
+        latest_price = closes[-1]
+        price_30d = closes[0]
+        price_7d = closes[-6] if len(closes) >= 6 else closes[0]
+    else:
+        fi = ticker.fast_info
+        p = getattr(fi, 'last_price', None) or getattr(fi, 'previous_close', None)
+        if p is not None and not math.isnan(p):
+            latest_price = price_7d = price_30d = float(p)
         else:
-            fi = ticker.fast_info
-            p = getattr(fi, 'last_price', None) or getattr(fi, 'previous_close', None)
-            if p is not None and not math.isnan(p):
-                latest_price = price_7d = price_30d = float(p)
-            else:
-                return None
+            return None
+    
+    # Metadata is optional; Yahoo can return prices while blocking quoteSummary.
+    try:
+        info = ticker.info
+    except Exception as e:
+        logger.warning(f"Error fetching metadata for {symbol}: {e}")
+        info = {}
+
+    name = info.get('longName') or info.get('shortName') or symbol.upper()
+    sector = info.get('sector') or ""
+    raw_exchange = info.get('exchange') or "Unknown"
+    
+    exchange_map = {
+        "NMS": "NASDAQ",
+        "NYQ": "NYSE",
+        "ASE": "NYSE American",
+        "NGM": "NASDAQ",
+        "PCX": "NYSE Arca",
+        "TOR": "TSX",
+        "VAN": "TSX Venture",
+        "CME": "CME",
+        "CMX": "COMEX",
+        "NYM": "NYMEX",
+        "CBT": "CBOT",
+        "ICE": "ICE",
+        "PNK": "OTC",
+        "LSE": "London SE",
+        "FRA": "Frankfurt SE",
+        "NCM": "NASDAQ",
+        "BATS": "Cboe BZX",
+        "ENX": "Euronext"
+    }
+    
+    exchange = exchange_map.get(raw_exchange, raw_exchange)
+    
+    description = info.get('longBusinessSummary') or info.get('description') or "No description available."
+    
+    return {
+        "name": name,
+        "price": float(latest_price),
+        "price_7d": float(price_7d),
+        "price_30d": float(price_30d),
+        "symbol": symbol.upper(),
+        "sector": sector,
+        "exchange": exchange,
+        "description": description
+    }
+
+
+def _lookup_fmp(symbol):
+    """Fallback: Look up a quote using Financial Modeling Prep API (works on cloud servers)."""
+    import requests
+    fmp_key = os.environ.get("FMP_API_KEY", "")
+    if not fmp_key:
+        logger.warning("FMP_API_KEY not set — FMP fallback unavailable.")
+        return None
+    
+    try:
+        # Get real-time quote
+        url = f"https://financialmodelingprep.com/stable/quote/{symbol}"
+        resp = requests.get(url, params={"apikey": fmp_key}, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
         
-        # Get company name
-        name = ticker.info.get('longName') or ticker.info.get('shortName') or symbol.upper()
-        sector = ticker.info.get('sector') or ""
-        raw_exchange = ticker.info.get('exchange') or "Unknown"
+        if not data or (isinstance(data, list) and len(data) == 0):
+            return None
         
-        exchange_map = {
-            "NMS": "NASDAQ",
-            "NYQ": "NYSE",
-            "ASE": "NYSE American",
-            "NGM": "NASDAQ",
-            "PCX": "NYSE Arca",
-            "TOR": "TSX",
-            "VAN": "TSX Venture",
-            "CME": "CME",
-            "CMX": "COMEX",
-            "NYM": "NYMEX",
-            "CBT": "CBOT",
-            "ICE": "ICE",
-            "PNK": "OTC",
-            "LSE": "London SE",
-            "FRA": "Frankfurt SE",
-            "NCM": "NASDAQ",
-            "BATS": "Cboe BZX",
-            "ENX": "Euronext"
-        }
+        quote = data[0] if isinstance(data, list) else data
+        price = quote.get("price") or quote.get("previousClose")
+        if not price:
+            return None
         
-        exchange = exchange_map.get(raw_exchange, raw_exchange)
+        # FMP doesn't give 7d/30d in the quote endpoint — use current price as estimate
+        prev_close = quote.get("previousClose", price)
         
-        description = ticker.info.get('longBusinessSummary') or ticker.info.get('description') or "No description available."
+        # Try to get historical for 7d/30d prices
+        price_7d = price
+        price_30d = price
+        try:
+            hist_url = f"https://financialmodelingprep.com/stable/historical-price-eod/light/{symbol}"
+            hist_resp = requests.get(hist_url, params={"apikey": fmp_key, "from": "", "to": ""}, timeout=10)
+            if hist_resp.status_code == 200:
+                hist_data = hist_resp.json()
+                if isinstance(hist_data, list) and len(hist_data) >= 6:
+                    price_7d = hist_data[min(5, len(hist_data)-1)].get("close", price)
+                if isinstance(hist_data, list) and len(hist_data) >= 22:
+                    price_30d = hist_data[min(21, len(hist_data)-1)].get("close", price)
+        except Exception:
+            pass
         
         return {
-            "name": name,
-            "price": float(latest_price),
+            "name": quote.get("name") or symbol.upper(),
+            "price": float(price),
             "price_7d": float(price_7d),
             "price_30d": float(price_30d),
             "symbol": symbol.upper(),
-            "sector": sector,
-            "exchange": exchange,
-            "description": description
+            "sector": "",
+            "exchange": quote.get("exchange", "Unknown"),
+            "description": "No description available."
         }
     except Exception as e:
-        print(f"Error looking up {symbol}: {e}")
+        logger.error(f"FMP lookup failed for {symbol}: {e}")
         return None
+
+
+def lookup(symbol):
+    """Look up quote for symbol. Tries yfinance first, falls back to FMP on cloud servers."""
+    # Try yfinance first (fast, no API key needed, works locally)
+    try:
+        result = _lookup_yfinance(symbol)
+        if result:
+            return result
+        logger.info(f"yfinance returned no data for {symbol}, trying FMP fallback.")
+    except Exception as e:
+        logger.warning(f"yfinance failed for {symbol}: {e} — trying FMP fallback.")
+    
+    # Fallback to Financial Modeling Prep (works on cloud servers)
+    try:
+        result = _lookup_fmp(symbol)
+        if result:
+            return result
+    except Exception as e:
+        logger.error(f"FMP fallback also failed for {symbol}: {e}")
+    
+    return None
 
 def search_symbol(query):
     """Search for a symbol by name."""

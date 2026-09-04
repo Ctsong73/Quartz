@@ -1,115 +1,125 @@
 {% extends "layout.html" %}
 
 {% block title %}
-    Portfolio
+Portfolio
 {% endblock %}
 
 {% block main %}
-    <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
-        <h2 class="mb-0 text-gold">Portfolio</h2>
-        <form action="/portfolio/reset" method="post" onsubmit="return confirm('Reset your portfolio, cash balance, trade history, and performance history? This cannot be undone.');">
-            <button type="submit" class="btn btn-outline-danger btn-sm">Reset Portfolio</button>
-        </form>
-    </div>
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+    <h2 class="mb-0 text-gold">Portfolio</h2>
+    <form action="/portfolio/reset" method="post"
+        onsubmit="return confirm('Reset your portfolio, cash balance, trade history, and performance history? This cannot be undone.');">
+        <button type="submit" class="btn btn-outline-danger btn-sm">Reset Portfolio</button>
+    </form>
+</div>
 
-    <div class="row mb-4 text-center">
-        <div class="col-md-6 mb-3 mb-md-0">
-            <div class="card bg-dark text-white shadow border-secondary">
-                <div class="card-body py-3">
-                    <h6 class="card-title text-white-50 text-uppercase mb-2">Weekly Performance</h6>
-                    <h3 class="card-text mb-0 font-monospace {% if weekly_pl > 0 %}text-success{% elif weekly_pl < 0 %}text-danger{% endif %}">
-                        {{ '+' if weekly_pl > 0 else '' }}{{ weekly_pl | usd }} 
-                        <small class="fs-6 ms-1">({{ '+' if weekly_pl_pct > 0 else '' }}{{ "%.2f" | format(weekly_pl_pct) }}%)</small>
-                    </h3>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-6">
-            <div class="card bg-dark text-white shadow border-secondary">
-                <div class="card-body py-3">
-                    <h6 class="card-title text-white-50 text-uppercase mb-2">Monthly Performance</h6>
-                    <h3 class="card-text mb-0 font-monospace {% if monthly_pl > 0 %}text-success{% elif monthly_pl < 0 %}text-danger{% endif %}">
-                        {{ '+' if monthly_pl > 0 else '' }}{{ monthly_pl | usd }} 
-                        <small class="fs-6 ms-1">({{ '+' if monthly_pl_pct > 0 else '' }}{{ "%.2f" | format(monthly_pl_pct) }}%)</small>
-                    </h3>
-                </div>
+<div class="row mb-4 text-center">
+    <div class="col-md-6 mb-3 mb-md-0">
+        <div class="card bg-dark text-white shadow border-secondary">
+            <div class="card-body py-3">
+                <h6 class="card-title text-white-50 text-uppercase mb-2">Weekly Performance</h6>
+                <h3
+                    class="card-text mb-0 font-monospace {% if weekly_pl > 0 %}text-success{% elif weekly_pl < 0 %}text-danger{% endif %}">
+                    {{ '+' if weekly_pl > 0 else '' }}{{ weekly_pl | usd }}
+                    <small class="fs-6 ms-1">({{ '+' if weekly_pl_pct > 0 else '' }}{{ "%.2f" | format(weekly_pl_pct)
+                        }}%)</small>
+                </h3>
             </div>
         </div>
     </div>
-
-    <div class="table-responsive">
-        <table class="table table-hover align-middle text-center">
-            <thead class="table-dark">
-                <tr>
-                    <th class="text-start ps-4">Symbol</th>
-                    <th class="text-start">Name</th>
-                    <th>Exchange</th>
-                    <th>Shares</th>
-                    <th>Price</th>
-                    <th>Avg Cost</th>
-                    <th>Total Value</th>
-                    <th>P/L ($)</th>
-                    <th class="pe-4">P/L (%)</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for stock in portfolio %}
-                    <tr>
-                        <td class="text-start ps-4 font-monospace fw-bold text-info">
-                            <a href="/quote?symbol={{ stock.symbol }}" class="text-decoration-none">{{ stock.symbol }}</a>
-                        </td>
-                        <td class="text-start font-monospace fw-bold text-info text-truncate" style="max-width: 220px;" title="{{ stock.name }}">
-                            <a href="/quote?symbol={{ stock.symbol }}" class="text-decoration-none">{{ stock.name }}</a>
-                        </td>
-                        <td class="small text-white-50">{{ stock.exchange }}</td>
-                        <td class="fw-bold {% if stock.shares > 0 %}text-success{% elif stock.shares < 0 %}text-danger{% else %}text-white-50{% endif %}">
-                            {{ stock.shares }}
-                        </td>
-                        <td class="text-white-50">{{ stock.price | usd }}</td>
-                        <td class="text-white-50">{{ stock.avg_cost | usd }}</td>
-                        <td class="fw-bold {% if stock.value > 0 %}text-success{% elif stock.value < 0 %}text-danger{% else %}text-white-50{% endif %}">
-                            {{ stock.value | usd }}
-                        </td>
-                        <td class="fw-bold {% if stock.pl > 0 %}text-success{% elif stock.pl < 0 %}text-danger{% else %}text-white-50{% endif %}">
-                            {{ stock.pl | usd }}
-                        </td>
-                        <td class="pe-4 fw-bold {% if stock.pl_pct > 0 %}text-success{% elif stock.pl_pct < 0 %}text-danger{% else %}text-white-50{% endif %}">
-                            {{ "%.2f" | format(stock.pl_pct) }}%
-                        </td>
-                    </tr>
-                {% endfor %}
-            </tbody>
-            <tfoot>
-                {% if short_liability > 0 %}
-                <tr class="table-secondary">
-                    <td colspan="6" class="text-end fw-bold text-white">Free Cash (Available for trading):</td>
-                    <td colspan="3" class="text-center text-white">{{ free_cash | usd }}</td>
-                </tr>
-                <tr class="table-secondary">
-                    <td colspan="6" class="text-end fw-bold text-white">Short Position Liability:</td>
-                    <td colspan="3" class="text-center text-warning">{{ short_liability | usd }}</td>
-                </tr>
-                <tr class="table-secondary border-bottom border-secondary text-danger">
-                    <td colspan="6" class="text-end fw-bold text-danger">Margin Cushion (Difference):</td>
-                    <td colspan="3" class="text-center text-danger">{{ margin_cushion | usd }}</td>
-                </tr>
-                {% endif %}
-                <tr class="table-dark">
-                    <td colspan="6" class="text-end fw-bold text-white">Total Cash Balance:</td>
-                    <td colspan="3" class="text-center text-gold" style="color: #FFD700 !important;">{{ cash | usd }}</td>
-                </tr>
-                <tr class="table-dark border-top border-light">
-                    <td colspan="6" class="text-end fw-bold text-white">Total Estimated Value:</td>
-                    <td colspan="3" class="text-center text-gold" style="color: #FFD700 !important;">{{ total | usd }}</td>
-                </tr>
-            </tfoot>
-        </table>
+    <div class="col-md-6">
+        <div class="card bg-dark text-white shadow border-secondary">
+            <div class="card-body py-3">
+                <h6 class="card-title text-white-50 text-uppercase mb-2">Monthly Performance</h6>
+                <h3
+                    class="card-text mb-0 font-monospace {% if monthly_pl > 0 %}text-success{% elif monthly_pl < 0 %}text-danger{% endif %}">
+                    {{ '+' if monthly_pl > 0 else '' }}{{ monthly_pl | usd }}
+                    <small class="fs-6 ms-1">({{ '+' if monthly_pl_pct > 0 else '' }}{{ "%.2f" | format(monthly_pl_pct)
+                        }}%)</small>
+                </h3>
+            </div>
+        </div>
     </div>
+</div>
 
-    <script>
-        // Auto-refresh the portfolio every 60 seconds (60000ms)
-        setTimeout(function() {
-            window.location.reload();
-        }, 60000);
-    </script>
+<div class="table-responsive">
+    <table class="table table-hover align-middle text-center">
+        <thead class="table-dark">
+            <tr>
+                <th class="text-start ps-4">Symbol</th>
+                <th class="text-start">Name</th>
+                <th>Exchange</th>
+                <th>Shares</th>
+                <th>Price</th>
+                <th>Avg Cost</th>
+                <th>Total Value</th>
+                <th>P/L ($)</th>
+                <th class="pe-4">P/L (%)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for stock in portfolio %}
+            <tr>
+                <td class="text-start ps-4 font-monospace fw-bold text-info">
+                    <a href="/quote?symbol={{ stock.symbol }}" class="text-decoration-none">{{ stock.symbol }}</a>
+                </td>
+                <td class="text-start font-monospace fw-bold text-info text-truncate" style="max-width: 220px;"
+                    title="{{ stock.name }}">
+                    <a href="/quote?symbol={{ stock.symbol }}" class="text-decoration-none">{{ stock.name }}</a>
+                </td>
+                <td class="small text-white-50">{{ stock.exchange }}</td>
+                <td
+                    class="fw-bold {% if stock.shares > 0 %}text-success{% elif stock.shares < 0 %}text-danger{% else %}text-white-50{% endif %}">
+                    {{ stock.shares }}
+                </td>
+                <td class="text-white-50">{{ stock.price | usd }}</td>
+                <td class="text-white-50">{{ stock.avg_cost | usd }}</td>
+                <td
+                    class="fw-bold {% if stock.value > 0 %}text-success{% elif stock.value < 0 %}text-danger{% else %}text-white-50{% endif %}">
+                    {{ stock.value | usd }}
+                </td>
+                <td
+                    class="fw-bold {% if stock.pl > 0 %}text-success{% elif stock.pl < 0 %}text-danger{% else %}text-white-50{% endif %}">
+                    {{ stock.pl | usd }}
+                </td>
+                <td
+                    class="pe-4 fw-bold {% if stock.pl_pct > 0 %}text-success{% elif stock.pl_pct < 0 %}text-danger{% else %}text-white-50{% endif %}">
+                    {{ "%.2f" | format(stock.pl_pct) }}%
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+        <tfoot>
+            {% if short_liability > 0 %}
+            <tr class="table-secondary">
+                <td colspan="6" class="text-end fw-bold text-white">Free Cash (Available for trading):</td>
+                <td colspan="3" class="text-center text-white">{{ free_cash | usd }}</td>
+            </tr>
+            <tr class="table-secondary">
+                <td colspan="6" class="text-end fw-bold text-white">Short Position Liability:</td>
+                <td colspan="3" class="text-center text-warning">{{ short_liability | usd }}</td>
+            </tr>
+            <tr class="table-secondary border-bottom border-secondary text-danger">
+                <td colspan="6" class="text-end fw-bold text-danger">Margin Cushion (Difference):</td>
+                <td colspan="3" class="text-center text-danger">{{ margin_cushion | usd }}</td>
+            </tr>
+            {% endif %}
+            <tr class="table-dark">
+                <td colspan="6" class="text-end fw-bold text-white">Total Cash Balance:</td>
+                <td colspan="3" class="text-center text-gold" style="color: #FFD700 !important;">{{ cash | usd }}</td>
+            </tr>
+            <tr class="table-dark border-top border-light">
+                <td colspan="6" class="text-end fw-bold text-white">Total Estimated Value:</td>
+                <td colspan="3" class="text-center text-gold" style="color: #FFD700 !important;">{{ total | usd }}</td>
+            </tr>
+        </tfoot>
+    </table>
+</div>
+
+<script>
+    // Auto-refresh the portfolio every 60 seconds (60000ms)
+    setTimeout(function () {
+        window.location.reload();
+    }, 60000);
+</script>
 {% endblock %}
