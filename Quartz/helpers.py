@@ -1,6 +1,7 @@
 import yfinance as yf
 import math
 import os
+import random
 import logging
 import time
 
@@ -335,15 +336,17 @@ _metadata_cache = {}
 _METADATA_TTL = 3600  # second(s); static sector/exchange data barely changes
 
 
-def _meta_get(symbol):
-    entry = _metadata_cache.get(symbol)
+def _meta_get(symbol, source=""):
+    key = f"{source}:{symbol}" if source else symbol
+    entry = _metadata_cache.get(key)
     if entry and time.time() - entry[0] < _METADATA_TTL:
         return entry[1]
     return None
 
 
-def _meta_set(symbol, meta):
-    _metadata_cache[symbol] = (time.time(), meta)
+def _meta_set(symbol, meta, source=""):
+    key = f"{source}:{symbol}" if source else symbol
+    _metadata_cache[key] = (time.time(), meta)
 
 
 _yahoo_session = {"ts": 0, "session": None, "crumb": ""}
@@ -454,7 +457,7 @@ def _yahoo_metadata(symbol):
     Secondary: /v10/finance/quoteSummary (crumb-protected) for the long business
     description and sector/exchange fallback."""
     symbol = symbol.upper()
-    cached = _meta_get(symbol)
+    cached = _meta_get(symbol, "yahoo")
     if cached is not None:
         return cached
 
@@ -470,7 +473,7 @@ def _yahoo_metadata(symbol):
                 meta["exchange"] = qs.get("exchange") or ""
             meta["description"] = qs.get("description") or ""
 
-    _meta_set(symbol, meta)
+    _meta_set(symbol, meta, "yahoo")
     return meta
 
 
@@ -523,7 +526,7 @@ def _fmp_profile(symbol):
     Tries the /stable/ endpoint first, then the legacy /api/v3/ endpoint (some free
     keys only work on legacy). Only called when FMP_API_KEY is present."""
     symbol = symbol.upper()
-    cached = _meta_get(symbol)
+    cached = _meta_get(symbol, "fmp")
     if cached is not None:
         return cached
     fmp_key = os.environ.get("FMP_API_KEY", "")
@@ -553,12 +556,12 @@ def _fmp_profile(symbol):
                 "exchange": exchange,
                 "description": profile.get("description") or "",
             }
-            _meta_set(symbol, meta)
+            _meta_set(symbol, meta, "fmp")
             return meta
         except Exception as e:
             logger.warning("FMP profile fetch failed (/%s) for %s: %s", base, symbol, e)
             continue
-    _meta_set(symbol, {})
+    _meta_set(symbol, {}, "fmp")
     return {}
 
 
@@ -909,24 +912,56 @@ def get_technical_summary(history):
         return "Market data integration is stabilizing. Current indicators show signs of consolidation across multiple timeframes and technical formations."
 
 
-def get_llm_analysis(history):
-    """Multi-provider technical analysis: Groq (Primary) -> Engine (Fallback)"""
+def get_llm_analysis(history, quote=None):
+    """Multi-provider technical analysis: Groq (Primary) -> Engine (Fallback).
+    Pass optional quote dict {symbol, name, sector} for stock-specific context."""
     # 1. Try Groq (Usually much better free tier speed/availability)
     groq_api_key = os.environ.get("GROQ_API_KEY")
-    recent_rsi = history["rsi"][-1]
+    symbol = (quote or {}).get("symbol", "")
+    name = (quote or {}).get("name", "")
+    sector = (quote or {}).get("sector", "")
+
+    closes = history["close"]
+    prices = [round(x, 2) for x in closes[-25:]]
+    ma10 = [round(x, 2) for x in history["ma10"][-25:]]
+    ma20 = [round(x, 2) for x in history["ma20"][-25:]]
+    roc7 = [round(x, 2) for x in history["roc7"][-25:]]
+    rsi = history["rsi"]
+    recent_rsi = rsi[-1]
+    rsi_5ago = rsi[-6] if len(rsi) > 6 else rsi[0]
+
+    price = closes[-1]
+    prev = closes[-2]
+    day_chg = ((price - prev) / prev) * 100 if prev else 0.0
+    week_chg = ((closes[-1] - closes[-6]) / closes[-6]) * 100 if len(closes) > 6 else 0.0
+
+    roc_signal = history.get("roc7_ma7")
+    roc_ma = [round(x, 2) for x in roc_signal[-25:]] if roc_signal else None
+
+    context_bits = [f"Security: {name} ({symbol})" if name else f"Security: {symbol}"]
+    if sector:
+        context_bits.append(f"Sector: {sector}")
+    context = " - ".join(context_bits)
     prompt = (
-        f"As a professional technical analyst, analyze this stock with the following data:\n"
-        f"Prices: {[round(x, 2) for x in history['close'][-20:]]}\n"
-        f"10-Day MA: {[round(x, 2) for x in history['ma10'][-20:]]}\n"
-        f"20-Day MA: {[round(x, 2) for x in history['ma20'][-20:]]}\n"
-        f"7-Day ROC (%): {[round(x, 2) for x in history['roc7'][-20:]]}\n"
-        f"Current RSI(14): {recent_rsi:.1f}\n\n"
-        f"Provide a structured analysis in THREE separate paragraphs:\n"
-        f"1. **Trend Analysis**: Analyze the price relationship with the 10 and 20-day Moving Averages.\n"
-        f"2. **Momentum (ROC)**: Comment on the 7-day Rate of Change and its direction.\n"
-        f"3. **Relative Strength (RSI)**: Comment on the current RSI value and potential overbought/oversold conditions.\n\n"
-        f"Be professional, objective, and do not use preambles."
+        f"{context}\n"
+        f"Daily closes (last 25): {prices}\n"
+        f"10-day MA (last 25): {ma10}\n"
+        f"20-day MA (last 25): {ma20}\n"
+        f"7-day ROC %% (last 25): {roc7}\n"
+        + (f"7-day ROC smoothed signal (last 25): {roc_ma}\n" if roc_ma else "")
+        + f"RSI(14): {recent_rsi:.1f} today vs {rsi_5ago:.1f} five sessions ago\n"
+        f"Last session change: {day_chg:+.2f}%%  |  5-day change: {week_chg:+.2f}%%\n\n"
+        "Write a lively, natural technical commentary for today's chart in plain English. "
+        "Do NOT use headings, bullets, or labels. Open with whichever point is most telling "
+        "right now (a sharp move, an MA crossover, momentum or RSI extremes), then build a "
+        "short narrative that connects the trend (10 vs 20-day MA and its current slope), "
+        "momentum (7-day ROC and its smoothed signal), and RSI behavior — noting whether RSI "
+        "is climbing or cooling versus five sessions ago. Express a clear but cautious "
+        "directional view and mention ONE price level to watch. Match your tone to the tape: "
+        "decisive when signals align, skeptical or balanced when they conflict.\n"
+        "Under 160 words. No preamble."
     )
+    temp = round(random.uniform(0.75, 0.95), 2)
 
     if groq_api_key and groq_api_key != "":
         try:
@@ -935,9 +970,9 @@ def get_llm_analysis(history):
             payload = {
                 "model": "llama-3.3-70b-versatile",
                 "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 1000, "temperature": 0.5
+                "max_tokens": 500, "temperature": temp
             }
-            response = requests.post(url, headers=headers, json=payload, timeout=5)
+            response = requests.post(url, headers=headers, json=payload, timeout=8)
             if response.status_code == 200:
                 return response.json()['choices'][0]['message']['content'].strip()
             print(f"Groq API failed ({response.status_code}). Triggering technical fallback.")

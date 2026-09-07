@@ -574,7 +574,7 @@ def quote():
 
         history = get_history(symbol.upper())
         news = get_news(quote["symbol"], quote["name"], quote.get("sector", ""))
-        analysis = get_llm_analysis(history) if history else None
+        analysis = get_llm_analysis(history, quote=quote) if history else None
         
         return render_template("quoted.html", quote=quote, history=history, news=news, analysis=analysis)
     return render_template("quote.html")
