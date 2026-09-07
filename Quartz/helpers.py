@@ -271,6 +271,12 @@ def _provider_symbols(symbol):
     return [symbol.upper(), *aliases.get(symbol.upper(), [])]
 
 
+def _fallback_exchange(symbol):
+    exchanges = {"BZ=F": "NYMEX", "CL=F": "NYMEX", "GC=F": "COMEX", "SI=F": "COMEX",
+                 "HG=F": "COMEX", "ZS=F": "CBOT", "ZC=F": "CBOT", "ZW=F": "CBOT", "NG=F": "NYMEX"}
+    return exchanges.get(symbol.upper(), "Unknown")
+
+
 def lookup(symbol):
     """Look up a quote using live providers before legacy fallbacks."""
     providers = (("London Strategic Edge", _lookup_lse), ("Twelve Data", _lookup_twelvedata),
@@ -280,6 +286,13 @@ def lookup(symbol):
             try:
                 result = provider(provider_symbol)
                 if result:
+                    if name == "London Strategic Edge":
+                        try:
+                            metadata = _twelvedata_quote(provider_symbol) or {}
+                        except Exception:
+                            metadata = {}
+                        result["name"] = metadata.get("name") or result.get("name") or symbol.upper()
+                        result["exchange"] = metadata.get("exchange") or _fallback_exchange(symbol)
                     result["symbol"] = symbol.upper()
                     return result
             except Exception as e:

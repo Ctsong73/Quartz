@@ -17,8 +17,11 @@ class ProviderTests(unittest.TestCase):
     def test_lookup_prefers_london_strategic_edge_for_live_prices(self):
         lse_quote = {"symbol": "AAPL", "price": 200}
         with patch.object(helpers, "_lookup_lse", return_value=lse_quote) as lse, \
-                patch.object(helpers, "_lookup_twelvedata") as twelve:
+                patch.object(helpers, "_lookup_twelvedata") as twelve, \
+                patch.object(helpers, "_twelvedata_quote", return_value={"name": "Apple Inc.", "exchange": "NASDAQ"}):
             self.assertEqual(helpers.lookup("AAPL"), lse_quote)
+            self.assertEqual(lse_quote["name"], "Apple Inc.")
+            self.assertEqual(lse_quote["exchange"], "NASDAQ")
             lse.assert_called_once_with("AAPL")
             twelve.assert_not_called()
 
@@ -26,6 +29,13 @@ class ProviderTests(unittest.TestCase):
         lse_quote = {"symbol": "BCO/USD", "price": 80}
         with patch.object(helpers, "_lookup_lse", side_effect=[None, lse_quote]):
             self.assertEqual(helpers.lookup("BZ=F")["price"], 80)
+
+    def test_lookup_preserves_futures_exchange_when_metadata_is_unavailable(self):
+        lse_quote = {"symbol": "BCO/USD", "price": 80}
+        with patch.object(helpers, "_lookup_lse", return_value=lse_quote), \
+                patch.object(helpers, "_twelvedata_quote", return_value=None):
+            quote = helpers.lookup("BZ=F")
+        self.assertEqual(quote["exchange"], "NYMEX")
     def test_lookup_falls_back_to_london_strategic_edge(self):
         lse_quote = {"symbol": "AAPL", "price": 200}
         with patch.object(helpers, "_lookup_twelvedata", return_value=None), \
