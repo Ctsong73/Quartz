@@ -751,7 +751,9 @@ def lookup(symbol):
                             result["exchange"] = display_exchange
                         elif name == "London Strategic Edge":
                             result["exchange"] = td_meta.get("exchange") or _fallback_exchange(symbol)
-                        if multiplier != 1:
+                        # Some providers return grains in dollars per bushel,
+                        # while others already return cents per bushel.
+                        if multiplier != 1 and float(result.get("price", 0)) < 100:
                             for field in ("price", "price_7d", "price_30d"):
                                 if field in result:
                                     result[field] = float(result[field]) * multiplier
