@@ -30,12 +30,15 @@ class ProviderTests(unittest.TestCase):
     def test_lookup_preserves_futures_exchange_when_metadata_is_unavailable(self):
         self.assertEqual(helpers._fallback_exchange("BZ=F"), "ICE")
 
-    def test_twelve_data_precedes_lse_for_brent(self):
-        twelve_quote = {"symbol": "BZ=F", "price": 97.25}
+    def test_twelve_data_precedes_lse_for_stocks(self):
+        """Twelve Data should still be tried first for equities (non-futures)."""
+        twelve_quote = {"symbol": "AAPL", "price": 200, "sector": "Technology",
+                        "exchange": "NASDAQ", "description": "Apple Inc."}
         with patch.object(helpers, "_lookup_lse") as lse, \
-                patch.object(helpers, "_lookup_twelvedata", return_value=twelve_quote):
-            quote = helpers.lookup("BZ=F")
-        self.assertEqual(quote["price"], 97.25)
+                patch.object(helpers, "_lookup_twelvedata", return_value=twelve_quote), \
+                patch.object(helpers, "_enrich_stock_metadata"):
+            quote = helpers.lookup("AAPL")
+        self.assertEqual(quote["price"], 200)
         lse.assert_not_called()
 
     def test_lookup_converts_lse_soybean_units(self):
@@ -46,10 +49,60 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(quote["price"], 1296.4)
         self.assertEqual(quote["name"], "Soybean Futures")
         self.assertEqual(quote["exchange"], "CBOT")
+    def test_lse_precedes_twelve_data_for_futures(self):
+        """LSE should be tried first for known futures symbols."""
+        lse_quote = {"symbol": "BZ=F", "price": 97.10, "price_7d": 96.5, "price_30d": 95.0}
+        with patch.object(helpers, "_lookup_lse", return_value=lse_quote) as lse, \
+                patch.object(helpers, "_lookup_twelvedata") as twelve:
+            quote = helpers.lookup("BZ=F")
+        self.assertEqual(quote["price"], 97.10)
+        lse.assert_called()
+        twelve.assert_not_called()
+
+    def test_ukoil_alias_precedes_bco_for_brent(self):
+        """UKOIL should be tried before BCO/USD for front-month accuracy."""
+        aliases = helpers._provider_symbols("BZ=F")
+        bco_index = aliases.index("BCO/USD")
+        ukoil_index = aliases.index("UKOIL")
+        self.assertLess(ukoil_index, bco_index)
+
+    def test_is_futures_detects_yahoo_style_symbols(self):
+        self.assertTrue(helpers._is_futures("BZ=F"))
+        self.assertTrue(helpers._is_futures("GC=F"))
+        self.assertTrue(helpers._is_futures("CL=F"))
+        self.assertFalse(helpers._is_futures("AAPL"))
+        self.assertFalse(helpers._is_futures("NVDA"))
+
+    def test_is_futures_detects_provider_aliases(self):
+        self.assertTrue(helpers._is_futures("UKOIL"))
+        self.assertTrue(helpers._is_futures("BCO/USD"))
+        self.assertTrue(helpers._is_futures("XAU/USD"))
+        self.assertFalse(helpers._is_futures("MSFT"))
+
+    def test_enrich_stock_metadata_fills_missing_fields(self):
+        result = {"sector": "", "exchange": "Twelve Data", "description": "No description available."}
+        meta = {"sector": "Technology", "exchange": "NASDAQ", "description": "Apple Inc description."}
+        with patch.object(helpers, "_yahoo_metadata", return_value=meta), \
+                patch.object(helpers, "_fmp_profile", return_value={}):
+            helpers._enrich_stock_metadata(result, "AAPL")
+        self.assertEqual(result["sector"], "Technology")
+        self.assertEqual(result["exchange"], "NASDAQ")
+        self.assertEqual(result["description"], "Apple Inc description.")
+
+    def test_enrich_stock_metadata_preserves_existing_fields(self):
+        """Should not overwrite fields that already have valid values."""
+        result = {"sector": "Financials", "exchange": "NYSE", "description": "A bank."}
+        with patch.object(helpers, "_yahoo_metadata") as yahoo:
+            helpers._enrich_stock_metadata(result, "JPM")
+        yahoo.assert_not_called()
+        self.assertEqual(result["sector"], "Financials")
+
     def test_lookup_falls_back_to_london_strategic_edge(self):
-        lse_quote = {"symbol": "AAPL", "price": 200}
+        lse_quote = {"symbol": "AAPL", "price": 200, "sector": "",
+                     "exchange": "London Strategic Edge", "description": "No description available."}
         with patch.object(helpers, "_lookup_twelvedata", return_value=None), \
-                patch.object(helpers, "_lookup_lse", return_value=lse_quote):
+                patch.object(helpers, "_lookup_lse", return_value=lse_quote), \
+                patch.object(helpers, "_enrich_stock_metadata"):
             self.assertEqual(helpers.lookup("AAPL"), lse_quote)
 
     def test_history_normalizes_provider_rows(self):

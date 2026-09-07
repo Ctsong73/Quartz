@@ -233,6 +233,16 @@ def _lookup_twelvedata(symbol):
         return None
     price = float(quote["close"]) if quote else closes[-1]
     previous_close = float(quote.get("previous_close", price)) if quote else price
+    exchange_map = {
+        "NMS": "NASDAQ", "NYQ": "NYSE", "ASE": "NYSE American",
+        "NGM": "NASDAQ", "PCX": "NYSE Arca", "TOR": "TSX",
+        "VAN": "TSX Venture", "CME": "CME", "CMX": "COMEX",
+        "NYM": "NYMEX", "CBT": "CBOT", "ICE": "ICE", "PNK": "OTC",
+        "LSE": "London SE", "FRA": "Frankfurt SE",
+        "NCM": "NASDAQ", "BATS": "Cboe BZX", "ENX": "Euronext",
+    }
+    raw_exchange = (quote or {}).get("exchange") or ""
+    exchange = exchange_map.get(raw_exchange, raw_exchange) or ""
     return {
         "name": (quote or {}).get("name") or symbol.upper(),
         "price": price,
@@ -240,7 +250,7 @@ def _lookup_twelvedata(symbol):
         "price_30d": closes[0] if closes else previous_close,
         "symbol": symbol.upper(),
         "sector": "",
-        "exchange": (quote or {}).get("exchange") or "Twelve Data",
+        "exchange": exchange,
         "description": "No description available.",
     }
 
@@ -302,10 +312,112 @@ def _lookup_lse(symbol):
     }
 
 
+def _is_futures(symbol):
+    """Return True if the symbol is a known futures/commodity instrument."""
+    s = symbol.upper()
+    if s.endswith("=F"):
+        return True
+    futures_aliases = {
+        "BCO/USD", "UKOIL", "WTI", "WTICO/USD", "XAU/USD", "XAG/USD",
+        "XCU/USD", "SOYBN/USD", "CORN/USD", "WHEAT/USD", "NATGAS/USD",
+    }
+    return s in futures_aliases
+
+
+def _yahoo_metadata(symbol):
+    """Fetch static metadata (sector, exchange, description) from Yahoo Finance quoteSummary.
+    No API key required. Used to enrich Twelve Data / LSE quotes for stocks."""
+    try:
+        url = (
+            f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
+            "?modules=assetProfile,summaryDetail"
+        )
+        headers = {"User-Agent": "Mozilla/5.0"}
+        resp = requests.get(url, headers=headers, timeout=6)
+        if resp.status_code != 200:
+            return {}
+        body = resp.json()
+        result = (body.get("quoteSummary") or {}).get("result") or []
+        if not result:
+            return {}
+        profile = result[0].get("assetProfile") or {}
+        sector = profile.get("sector") or ""
+        description = profile.get("longBusinessSummary") or ""
+
+        # Also read the exchange from a lightweight quote fetch
+        exchange_map = {
+            "NMS": "NASDAQ", "NYQ": "NYSE", "ASE": "NYSE American",
+            "NGM": "NASDAQ", "PCX": "NYSE Arca", "TOR": "TSX",
+            "VAN": "TSX Venture", "CME": "CME", "CMX": "COMEX",
+            "NYM": "NYMEX", "CBT": "CBOT", "ICE": "ICE", "PNK": "OTC",
+            "LSE": "London SE", "FRA": "Frankfurt SE",
+            "NCM": "NASDAQ", "BATS": "Cboe BZX", "ENX": "Euronext",
+        }
+        raw_exchange = result[0].get("summaryDetail", {}).get("exchange", "")
+        exchange = exchange_map.get(raw_exchange, raw_exchange)
+        return {"sector": sector, "exchange": exchange, "description": description}
+    except Exception as e:
+        logger.warning("Yahoo metadata fetch failed for %s: %s", symbol, e)
+        return {}
+
+
+def _fmp_profile(symbol):
+    """Fetch static metadata (sector, exchange, description) from FMP profile endpoint.
+    Only called when FMP_API_KEY is present. Used as an alternative to Yahoo metadata."""
+    fmp_key = os.environ.get("FMP_API_KEY", "")
+    if not fmp_key:
+        return {}
+    try:
+        url = f"https://financialmodelingprep.com/stable/profile/{symbol}"
+        resp = requests.get(url, params={"apikey": fmp_key}, timeout=8)
+        if resp.status_code != 200:
+            return {}
+        data = resp.json()
+        profile = data[0] if isinstance(data, list) and data else (data or {})
+        exchange_map = {
+            "NASDAQ": "NASDAQ", "NYSE": "NYSE", "AMEX": "NYSE American",
+            "NYSE ARCA": "NYSE Arca", "TSX": "TSX", "LSE": "London SE",
+            "XETRA": "Frankfurt SE", "EURONEXT": "Euronext",
+        }
+        raw_ex = profile.get("exchangeShortName") or profile.get("exchange") or ""
+        exchange = exchange_map.get(raw_ex.upper(), raw_ex)
+        return {
+            "sector": profile.get("sector") or "",
+            "exchange": exchange,
+            "description": profile.get("description") or "",
+        }
+    except Exception as e:
+        logger.warning("FMP profile fetch failed for %s: %s", symbol, e)
+        return {}
+
+
+def _enrich_stock_metadata(result, symbol):
+    """Enrich a stock lookup result with sector, exchange, and description.
+    Tries FMP (if key present) then Yahoo Finance quoteSummary. Mutates result in place."""
+    needs_sector = not result.get("sector")
+    needs_exchange = not result.get("exchange") or result["exchange"] in ("Twelve Data", "London Strategic Edge", "Unknown")
+    needs_desc = not result.get("description") or result["description"] == "No description available."
+    if not (needs_sector or needs_exchange or needs_desc):
+        return
+    # Try FMP first (accurate exchange names), then Yahoo
+    meta = _fmp_profile(symbol) if os.environ.get("FMP_API_KEY") else {}
+    if not meta.get("sector") and not meta.get("description"):
+        meta = _yahoo_metadata(symbol)
+    if needs_sector and meta.get("sector"):
+        result["sector"] = meta["sector"]
+    if needs_exchange and meta.get("exchange"):
+        result["exchange"] = meta["exchange"]
+    if needs_desc and meta.get("description"):
+        result["description"] = meta["description"]
+
+
 def _provider_symbols(symbol):
-    """Return provider-compatible aliases for common Yahoo futures symbols."""
+    """Return provider-compatible aliases for common Yahoo futures symbols.
+    UKOIL is listed before BCO/USD for Brent because it maps to the ICE front-month
+    contract (matching CNBC/Bloomberg quotes), whereas BCO/USD can track the
+    generic/continuous next-nearby contract which trades ~$1-2 higher."""
     aliases = {
-        "BZ=F": ["BCO/USD"],
+        "BZ=F": ["UKOIL", "BCO/USD"],
         "CL=F": ["WTI", "WTICO/USD"],
         "GC=F": ["XAU/USD"],
         "SI=F": ["XAG/USD"],
@@ -349,34 +461,64 @@ def _display_metadata(symbol):
 
 
 def lookup(symbol):
-    """Look up a quote using configured providers in reliability order."""
-    providers = (
-        ("Twelve Data", _lookup_twelvedata),
-        ("London Strategic Edge", _lookup_lse),
-        ("FMP", _lookup_fmp),
-        ("yfinance", _lookup_yfinance),
-    )
+    """Look up a quote using configured providers in reliability order.
+    
+    Provider ordering:
+    - Futures/commodities: LSE first (built for these instruments), then Twelve Data,
+      FMP, yfinance. LSE tracks front-month contracts which match CNBC/Bloomberg quotes.
+    - Stocks: Twelve Data first (better equities coverage), then LSE, FMP, yfinance.
+    
+    After a successful stock lookup, sector, exchange, and description are enriched
+    from Yahoo Finance quoteSummary (or FMP if a key is configured).
+    """
+    is_fut = _is_futures(symbol)
+    if is_fut:
+        providers = (
+            ("London Strategic Edge", _lookup_lse),
+            ("Twelve Data", _lookup_twelvedata),
+            ("FMP", _lookup_fmp),
+            ("yfinance", _lookup_yfinance),
+        )
+    else:
+        providers = (
+            ("Twelve Data", _lookup_twelvedata),
+            ("London Strategic Edge", _lookup_lse),
+            ("FMP", _lookup_fmp),
+            ("yfinance", _lookup_yfinance),
+        )
+
     for name, provider in providers:
         for provider_symbol in _provider_symbols(symbol):
             try:
                 result = provider(provider_symbol)
                 if result:
-                    if name == "London Strategic Edge":
+                    if name == "London Strategic Edge" or is_fut:
+                        # Apply display metadata overrides (name, exchange, unit multiplier)
                         try:
-                            metadata = _twelvedata_quote(provider_symbol) or {}
+                            td_meta = _twelvedata_quote(provider_symbol) or {} if name == "London Strategic Edge" else {}
                         except Exception:
-                            metadata = {}
+                            td_meta = {}
                         display_name, display_exchange, multiplier = _display_metadata(symbol)
-                        result["name"] = display_name or metadata.get("name") or result.get("name") or symbol.upper()
-                        result["exchange"] = display_exchange or metadata.get("exchange") or _fallback_exchange(symbol)
-                        for field in ("price", "price_7d", "price_30d"):
-                            if field in result:
-                                result[field] = float(result[field]) * multiplier
+                        if display_name:
+                            result["name"] = display_name
+                        elif name == "London Strategic Edge":
+                            result["name"] = td_meta.get("name") or result.get("name") or symbol.upper()
+                        if display_exchange:
+                            result["exchange"] = display_exchange
+                        elif name == "London Strategic Edge":
+                            result["exchange"] = td_meta.get("exchange") or _fallback_exchange(symbol)
+                        if multiplier != 1:
+                            for field in ("price", "price_7d", "price_30d"):
+                                if field in result:
+                                    result[field] = float(result[field]) * multiplier
                     result["symbol"] = symbol.upper()
+                    # Enrich stocks with sector/exchange/description metadata
+                    if not is_fut:
+                        _enrich_stock_metadata(result, symbol.upper())
                     return result
             except Exception as e:
                 logger.warning("%s lookup failed for %s: %s", name, provider_symbol, e)
-    
+
     return None
 
 def search_symbol(query):
