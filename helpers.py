@@ -711,6 +711,10 @@ def lookup(symbol):
     if is_fut:
         providers = (
             ("Yahoo Futures", _lookup_yahoo_futures),
+            ("Twelve Data", _lookup_twelvedata),
+            ("yfinance", _lookup_yfinance),
+        ) if os.environ.get("RENDER") else (
+            ("Yahoo Futures", _lookup_yahoo_futures),
             ("London Strategic Edge", _lookup_lse),
             ("Twelve Data", _lookup_twelvedata),
             ("FMP", _lookup_fmp),
@@ -718,6 +722,9 @@ def lookup(symbol):
         )
     else:
         providers = (
+            ("Twelve Data", _lookup_twelvedata),
+            ("yfinance", _lookup_yfinance),
+        ) if os.environ.get("RENDER") else (
             ("Twelve Data", _lookup_twelvedata),
             ("London Strategic Edge", _lookup_lse),
             ("FMP", _lookup_fmp),
@@ -750,7 +757,7 @@ def lookup(symbol):
                                     result[field] = float(result[field]) * multiplier
                     result["symbol"] = symbol.upper()
                     # Enrich stocks with sector/exchange/description metadata
-                    if not is_fut:
+                    if not is_fut and not os.environ.get("RENDER"):
                         _enrich_stock_metadata(result, symbol.upper())
                     return result
             except Exception as e:

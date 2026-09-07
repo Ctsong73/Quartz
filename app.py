@@ -605,7 +605,11 @@ def login():
             return render_template("login.html")
         
         username = request.form.get("username")
-        rows = db.execute("SELECT * FROM users WHERE username = ?", username)
+        try:
+            rows = db.execute("SELECT * FROM users WHERE username = ?", username)
+        except Exception:
+            logger.exception("Login database query failed for username %r", username)
+            return apology("The database is temporarily unavailable. Please try again.", 503)
 
         if len(rows) != 1:
             flash("Username not found, please register.")
@@ -701,6 +705,7 @@ def health():
         status["database"] = "connected" if result else "empty_result"
     except Exception as e:
         status["database"] = f"error: {str(e)}"
+        status["status"] = "degraded"
     
     # Do not call external market-data APIs from a readiness probe. Their
     # latency and rate limits should not determine whether the web process is live.
@@ -719,7 +724,8 @@ def health():
         "GROQ_API_KEY": bool(os.environ.get("GROQ_API_KEY")),
     }
     
-    return jsonify(status)
+    response_status = 200 if status["status"] == "ok" else 503
+    return jsonify(status), response_status
 
 @app.route("/ping")
 def ping():
