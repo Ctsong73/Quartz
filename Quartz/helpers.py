@@ -288,10 +288,14 @@ def _display_metadata(symbol):
 
 def lookup(symbol):
     """Look up a quote using live providers before legacy fallbacks."""
-    providers = (("London Strategic Edge", _lookup_lse), ("Twelve Data", _lookup_twelvedata),
-                 ("FMP", _lookup_fmp), ("yfinance", _lookup_yfinance))
+    is_brent_future = symbol.upper() == "BZ=F"
+    providers = (("Twelve Data", _lookup_twelvedata), ("FMP", _lookup_fmp),
+                 ("yfinance", _lookup_yfinance)) if is_brent_future else (
+                     ("London Strategic Edge", _lookup_lse), ("Twelve Data", _lookup_twelvedata),
+                     ("FMP", _lookup_fmp), ("yfinance", _lookup_yfinance))
+    provider_symbols = [symbol.upper()] if is_brent_future else _provider_symbols(symbol)
     for name, provider in providers:
-        for provider_symbol in _provider_symbols(symbol):
+        for provider_symbol in provider_symbols:
             try:
                 result = provider(provider_symbol)
                 if result:

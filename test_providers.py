@@ -26,16 +26,20 @@ class ProviderTests(unittest.TestCase):
             twelve.assert_not_called()
 
     def test_lookup_maps_brent_futures_symbol(self):
-        lse_quote = {"symbol": "BCO/USD", "price": 80}
-        with patch.object(helpers, "_lookup_lse", side_effect=[None, lse_quote]):
-            self.assertEqual(helpers.lookup("BZ=F")["price"], 80)
+        twelve_quote = {"symbol": "BZ=F", "price": 97.25}
+        with patch.object(helpers, "_lookup_twelvedata", return_value=twelve_quote):
+            self.assertEqual(helpers.lookup("BZ=F")["price"], 97.25)
 
     def test_lookup_preserves_futures_exchange_when_metadata_is_unavailable(self):
-        lse_quote = {"symbol": "BCO/USD", "price": 80}
-        with patch.object(helpers, "_lookup_lse", return_value=lse_quote), \
-                patch.object(helpers, "_twelvedata_quote", return_value=None):
+        self.assertEqual(helpers._fallback_exchange("BZ=F"), "ICE")
+
+    def test_brent_future_does_not_use_lse_reference_price(self):
+        twelve_quote = {"symbol": "BZ=F", "price": 97.25}
+        with patch.object(helpers, "_lookup_lse") as lse, \
+                patch.object(helpers, "_lookup_twelvedata", return_value=twelve_quote):
             quote = helpers.lookup("BZ=F")
-        self.assertEqual(quote["exchange"], "ICE")
+        self.assertEqual(quote["price"], 97.25)
+        lse.assert_not_called()
 
     def test_lookup_converts_lse_soybean_units(self):
         lse_quote = {"symbol": "SOYBN/USD", "price": 12.964, "price_7d": 13.1, "price_30d": 13.2}
