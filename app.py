@@ -5,6 +5,7 @@ import time
 import traceback
 import requests
 import threading
+from flask import jsonify
 
 # Configure basic logging
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s in %(module)s: %(message)s')
@@ -585,9 +586,29 @@ def search():
     q = request.args.get("q", "")
     if not q:
         return jsonify([])
-    
+
     results = search_symbol(q)
     return jsonify(results)
+
+@app.route("/api/quote")
+@login_required
+def api_quote():
+    """API endpoint to get live quote and price for a single symbol"""
+    symbol = request.args.get("symbol", "").strip().upper()
+    if not symbol:
+        return jsonify({"error": "Symbol is required"}), 400
+
+    quote = lookup(symbol)
+    if not quote:
+        return jsonify({"error": "Symbol not found"}), 404
+
+    price = float(quote["price"])
+    return jsonify({
+        "symbol": quote["symbol"],
+        "name": quote.get("name", quote["symbol"]),
+        "price": price,
+        "formatted_price": usd(price)
+    })
 
 @app.route("/api/market_ticker")
 def market_ticker():
@@ -598,7 +619,14 @@ def market_ticker():
 @app.route("/health")
 def health():
     """Health check endpoint for debugging deployment issues."""
-    status = {"status": "ok", "database": "unknown", "yfinance": "unknown", "fmp": "unknown"}
+    status = {
+        "status": "ok",
+        "database": "unknown",
+        "twelvedata": "configured" if os.environ.get("TWELVE_DATA_API_KEY") or os.environ.get("TWELVEDATA_API_KEY") else "no_api_key",
+        "london_strategic_edge": "configured" if os.environ.get("LSE_API_KEY") else "no_api_key",
+        "yfinance": "unknown",
+        "fmp": "unknown",
+    }
     
     # Test database connection
     try:
@@ -638,6 +666,8 @@ def health():
         "DATABASE_URL": bool(os.environ.get("DATABASE_URL")),
         "SECRET_KEY": bool(os.environ.get("SECRET_KEY")),
         "FMP_API_KEY": bool(fmp_key),
+        "TWELVE_DATA_API_KEY": bool(os.environ.get("TWELVE_DATA_API_KEY") or os.environ.get("TWELVEDATA_API_KEY")),
+        "LSE_API_KEY": bool(os.environ.get("LSE_API_KEY")),
         "GROQ_API_KEY": bool(os.environ.get("GROQ_API_KEY")),
     }
     

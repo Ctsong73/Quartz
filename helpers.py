@@ -302,21 +302,34 @@ def _lookup_lse(symbol):
     }
 
 
+def _provider_symbols(symbol):
+    """Return provider-compatible aliases for common Yahoo futures symbols."""
+    aliases = {
+        "BZ=F": ["BRENT"],
+        "CL=F": ["WTI", "WTICO/USD"],
+        "GC=F": ["XAU/USD"],
+        "SI=F": ["XAG/USD"],
+    }
+    return [symbol.upper(), *aliases.get(symbol.upper(), [])]
+
+
 def lookup(symbol):
     """Look up a quote using configured providers in reliability order."""
     providers = (
-        ("Twelve Data", _lookup_twelvedata),
         ("London Strategic Edge", _lookup_lse),
+        ("Twelve Data", _lookup_twelvedata),
         ("FMP", _lookup_fmp),
         ("yfinance", _lookup_yfinance),
     )
     for name, provider in providers:
-        try:
-            result = provider(symbol.upper())
-            if result:
-                return result
-        except Exception as e:
-            logger.warning("%s lookup failed for %s: %s", name, symbol, e)
+        for provider_symbol in _provider_symbols(symbol):
+            try:
+                result = provider(provider_symbol)
+                if result:
+                    result["symbol"] = symbol.upper()
+                    return result
+            except Exception as e:
+                logger.warning("%s lookup failed for %s: %s", name, provider_symbol, e)
     
     return None
 

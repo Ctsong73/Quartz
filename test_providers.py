@@ -14,6 +14,18 @@ class ProviderTests(unittest.TestCase):
             twelve.assert_called_once_with("AAPL")
             fmp.assert_not_called()
 
+    def test_lookup_prefers_london_strategic_edge_for_live_prices(self):
+        lse_quote = {"symbol": "AAPL", "price": 200}
+        with patch.object(helpers, "_lookup_lse", return_value=lse_quote) as lse, \
+                patch.object(helpers, "_lookup_twelvedata") as twelve:
+            self.assertEqual(helpers.lookup("AAPL"), lse_quote)
+            lse.assert_called_once_with("AAPL")
+            twelve.assert_not_called()
+
+    def test_lookup_maps_brent_futures_symbol(self):
+        lse_quote = {"symbol": "BRENT", "price": 80}
+        with patch.object(helpers, "_lookup_lse", side_effect=[None, lse_quote]):
+            self.assertEqual(helpers.lookup("BZ=F")["price"], 80)
     def test_lookup_falls_back_to_london_strategic_edge(self):
         lse_quote = {"symbol": "AAPL", "price": 200}
         with patch.object(helpers, "_lookup_twelvedata", return_value=None), \
