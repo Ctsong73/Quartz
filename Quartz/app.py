@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s in %
 logger = logging.getLogger(__name__)
 
 import yfinance as yf
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from flask import Flask, flash, redirect, render_template, request, session, jsonify
 from werkzeug.security import check_password_hash, generate_password_hash
 from dotenv import load_dotenv
@@ -304,6 +304,67 @@ def get_baseline_nlv(history_rows, days, max_days=None, fallback_value=None, tod
     return 1000000.00
 
 
+def _estimate_baseline_nlv(user_id, days, current_cash, quote_cache, today=None):
+    """Reconstruct net liquidation value as of `days` calendar days ago from the
+    transaction ledger. This values only the shares actually held around that date,
+    so positions bought this week don't get credited with a full period of gains
+    (the old estimate priced CURRENT shares at 30-day-old prices, inflating P&L)."""
+    if today is None:
+        today = date.today()
+    cutoff = today - timedelta(days=days)
+    txs = db.execute(
+        "SELECT symbol, shares, price, type, timestamp FROM transactions "
+        "WHERE user_id = ? ORDER BY timestamp ASC",
+        user_id,
+    )
+
+    shares_st = {}
+    cash_flow = 0.0
+    for tx in txs:
+        ts = tx.get("timestamp")
+        if isinstance(ts, datetime):
+            before = ts.date() <= cutoff
+        elif isinstance(ts, date):
+            before = ts <= cutoff
+        else:
+            before = str(ts)[:10] <= cutoff.isoformat()
+        sign = 1 if tx["type"] == "buy" else -1
+        amount = float(tx["shares"]) * float(tx["price"])
+        if before:
+            shares_st[tx["symbol"]] = shares_st.get(tx["symbol"], 0) + sign * float(tx["shares"])
+        else:
+            # Buys subtract cash later; sells add it. Undo those flows to get
+            # the cash balance as of the cutoff.
+            cash_flow += sign * amount
+    cash_st = current_cash + cash_flow
+
+    nlv = cash_st
+    for symbol, sh in shares_st.items():
+        if sh == 0:
+            continue
+        q = quote_cache.get(symbol)
+        if q is None:
+            q = lookup(symbol)
+            if q:
+                quote_cache[symbol] = q
+        if q is not None:
+            # Value the snapshot at the horizon being measured (7d vs 30d).
+            hist = q.get("price_30d") if days >= 14 else q.get("price_7d")
+            if hist is None:
+                hist = q.get("price_30d" if days >= 14 else "price_7d", q["price"])
+        else:
+            hist = None
+        if hist is None:
+            last_tx = db.execute(
+                "SELECT price FROM transactions WHERE user_id = ? AND symbol = ? "
+                "ORDER BY timestamp DESC LIMIT 1",
+                user_id, symbol,
+            )
+            hist = float(last_tx[0]["price"]) if last_tx else 0.0
+        nlv += sh * float(hist)
+    return nlv
+
+
 
 @app.after_request
 def after_request(response):
@@ -329,11 +390,16 @@ def index():
     holdings = db.execute("SELECT symbol, shares FROM portfolio WHERE user_id = ?", user_id)
     portfolio = []
     total_value = cash
+    quote_cache = {}
 
     for holding in holdings:
         symbol = holding["symbol"]
         shares = holding["shares"]
-        quote = lookup(symbol)
+        quote = quote_cache.get(symbol)
+        if quote is None:
+            quote = lookup(symbol)
+            if quote:
+                quote_cache[symbol] = quote
         
         # Calculate cost basis from transactions
         if shares > 0:
@@ -396,9 +462,10 @@ def index():
         user_id, total_value
     )
 
-    # Calculate holdings-based fallback NLVs using historical stock prices (7d and 30d ago)
-    nlv_7d_est = cash + sum(item["shares"] * item["price_7d"] for item in portfolio)
-    nlv_30d_est = cash + sum(item["shares"] * item["price_30d"] for item in portfolio)
+    # Reconstruct 7d/30d baselines from the transaction ledger, so recent buys
+    # don't get credited with gains from before they were held.
+    nlv_7d_est = _estimate_baseline_nlv(user_id, 7, cash, quote_cache)
+    nlv_30d_est = _estimate_baseline_nlv(user_id, 30, cash, quote_cache)
 
     # Get historical NLV values for the 7-day and 30-day performance windows.
     history_rows = db.execute(

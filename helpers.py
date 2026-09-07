@@ -565,6 +565,40 @@ def _fmp_profile(symbol):
     return {}
 
 
+def _yf_info_metadata(symbol):
+    """Last-resort metadata (sector, exchange, description) from yfinance .info.
+    Cached per symbol (6h) so this slow-ish source is used sparingly."""
+    exchange_map = {
+        "NMS": "NASDAQ", "NYQ": "NYSE", "ASE": "NYSE American",
+        "NGM": "NASDAQ", "PCX": "NYSE Arca", "TOR": "TSX",
+        "VAN": "TSX Venture", "CME": "CME", "CMX": "COMEX",
+        "NYM": "NYMEX", "CBT": "CBOT", "ICE": "ICE", "PNK": "OTC",
+        "LSE": "London SE", "FRA": "Frankfurt SE",
+        "NCM": "NASDAQ", "BATS": "Cboe BZX", "ENX": "Euronext",
+    }
+    symbol = symbol.upper()
+    cached = _meta_get(symbol, "yf")
+    if cached is not None:
+        return cached
+    try:
+        info = yf.Ticker(symbol).info or {}
+    except Exception as e:
+        logger.warning("yfinance info failed for %s: %s", symbol, e)
+        info = {}
+    if not isinstance(info, dict) or not info:
+        _meta_set(symbol, {}, "yf")
+        return {}
+    raw_ex = info.get("exchange") or info.get("fullExchangeName") or ""
+    exchange = exchange_map.get(raw_ex, raw_ex) or ""
+    meta = {
+        "sector": info.get("sector") or "",
+        "exchange": exchange,
+        "description": info.get("longBusinessSummary") or "",
+    }
+    _meta_set(symbol, meta, "yf")
+    return meta
+
+
 def _enrich_stock_metadata(result, symbol):
     """Enrich a stock lookup result with sector, exchange, and description.
     Tries FMP (if key present) then Yahoo Finance quoteSummary. Mutates result in place."""
@@ -591,6 +625,18 @@ def _enrich_stock_metadata(result, symbol):
         result["exchange"] = meta["exchange"]
     if needs_desc and meta.get("description"):
         result["description"] = meta["description"]
+
+    # Last resort: yfinance .info (slow, cached 6h) — ensures sector/exchange
+    # rarely stay blank for listed stocks regardless of FMP/Yahoo availability.
+    if (needs_sector and not result.get("sector")) or (needs_exchange and not result.get("exchange")):
+        yf_meta = _yf_info_metadata(symbol)
+        if yf_meta:
+            if not result.get("sector") and yf_meta.get("sector"):
+                result["sector"] = yf_meta["sector"]
+            if not result.get("exchange") and yf_meta.get("exchange"):
+                result["exchange"] = yf_meta["exchange"]
+            if needs_desc and not result.get("description") and yf_meta.get("description"):
+                result["description"] = yf_meta["description"]
     
     # Log if metadata still missing after enrichment attempts
     if needs_sector and not result.get("sector"):
