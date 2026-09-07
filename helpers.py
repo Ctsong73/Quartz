@@ -320,7 +320,7 @@ def _provider_symbols(symbol):
 
 def _fallback_exchange(symbol):
     exchanges = {
-        "BZ=F": "NYMEX",
+        "BZ=F": "ICE",
         "CL=F": "NYMEX",
         "GC=F": "COMEX",
         "SI=F": "COMEX",
@@ -335,7 +335,7 @@ def _fallback_exchange(symbol):
 
 def _display_metadata(symbol):
     metadata = {
-        "BZ=F": ("Brent Crude Oil", "NYMEX", 1),
+        "BZ=F": ("Brent Crude Oil", "ICE", 1),
         "CL=F": ("WTI Crude Oil", "NYMEX", 1),
         "GC=F": ("Gold Futures", "COMEX", 1),
         "SI=F": ("Silver Futures", "COMEX", 1),

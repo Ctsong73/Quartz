@@ -272,13 +272,13 @@ def _provider_symbols(symbol):
 
 
 def _fallback_exchange(symbol):
-    exchanges = {"BZ=F": "NYMEX", "CL=F": "NYMEX", "GC=F": "COMEX", "SI=F": "COMEX",
+    exchanges = {"BZ=F": "ICE", "CL=F": "NYMEX", "GC=F": "COMEX", "SI=F": "COMEX",
                  "HG=F": "COMEX", "ZS=F": "CBOT", "ZC=F": "CBOT", "ZW=F": "CBOT", "NG=F": "NYMEX"}
     return exchanges.get(symbol.upper(), "Unknown")
 
 
 def _display_metadata(symbol):
-    metadata = {"BZ=F": ("Brent Crude Oil", "NYMEX", 1), "CL=F": ("WTI Crude Oil", "NYMEX", 1),
+    metadata = {"BZ=F": ("Brent Crude Oil", "ICE", 1), "CL=F": ("WTI Crude Oil", "NYMEX", 1),
                 "GC=F": ("Gold Futures", "COMEX", 1), "SI=F": ("Silver Futures", "COMEX", 1),
                 "HG=F": ("Copper Futures", "COMEX", 1), "ZS=F": ("Soybean Futures", "CBOT", 100),
                 "ZC=F": ("Corn Futures", "CBOT", 100), "ZW=F": ("Wheat Futures", "CBOT", 100),

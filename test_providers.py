@@ -35,7 +35,7 @@ class ProviderTests(unittest.TestCase):
         with patch.object(helpers, "_lookup_lse", return_value=lse_quote), \
                 patch.object(helpers, "_twelvedata_quote", return_value=None):
             quote = helpers.lookup("BZ=F")
-        self.assertEqual(quote["exchange"], "NYMEX")
+        self.assertEqual(quote["exchange"], "ICE")
 
     def test_lookup_converts_lse_soybean_units(self):
         lse_quote = {"symbol": "SOYBN/USD", "price": 12.964, "price_7d": 13.1, "price_30d": 13.2}
