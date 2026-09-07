@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from helpers import apology, get_history, get_llm_analysis, get_news, login_required, lookup, usd, search_symbol
+from helpers import apology, get_history, get_llm_analysis, get_news, login_required, lookup, usd, search_symbol, _twelvedata_quote, _lse_candles
 
 # API Configuration
 os.environ["GROQ_API_KEY"] = os.environ.get("GROQ_API_KEY", "")
@@ -58,66 +58,101 @@ def _get_japan_10y_yield():
         logger.warning(f"MOF JGB 10Y yield fetch failed: {e}")
     return None
 
-def _get_market_tickers_yfinance():
-    """Fetch market ticker data via yfinance (works locally, often blocked on cloud)."""
+def _quote_from_td(symbol):
+    """Live price + previous close via Twelve Data (None if unavailable)."""
+    try:
+        q = _twelvedata_quote(symbol)
+    except Exception as e:
+        logger.warning(f"Twelve Data ticker {symbol}: {e}")
+        return None
+    if not q or not q.get("close"):
+        return None
+    close = float(q["close"])
+    raw_prev = q.get("previous_close")
+    prev = float(raw_prev) if raw_prev else close
+    change = close - prev
+    pct = (change / prev * 100) if prev else 0.0
+    return {"price": close, "change": change, "pct": pct, "symbol": symbol, "source": "Twelve Data"}
+
+
+def _quote_from_lse(symbol):
+    """Live price vs previous daily close via London Strategic Edge candles."""
+    try:
+        rows = _lse_candles(symbol, limit=2)
+        closes = [float(r["close"]) for r in rows if r.get("close") is not None]
+    except Exception as e:
+        logger.warning(f"London Strategic Edge ticker {symbol}: {e}")
+        return None
+    if not closes:
+        return None
+    close = closes[-1]
+    prev = closes[-2] if len(closes) >= 2 else close
+    change = close - prev
+    pct = (change / prev * 100) if prev else 0.0
+    return {"price": close, "change": change, "pct": pct, "symbol": symbol, "source": "London Strategic Edge"}
+
+
+def _quote_from_yf(symbol):
+    """Last-resort per-symbol fallback via yfinance (history then fast_info)."""
+    try:
+        t = yf.Ticker(symbol)
+        h = t.history(period="5d")
+        if not h.empty:
+            h = h.dropna(subset=["Close"])
+        close = None
+        prev = None
+        if not h.empty:
+            closes = [float(c) for c in h["Close"] if not math.isnan(c)]
+            if closes:
+                close = closes[-1]
+                prev = closes[-2] if len(closes) >= 2 else close
+        if close is None:
+            fi = t.fast_info
+            p = getattr(fi, "last_price", None) or getattr(fi, "previous_close", None)
+            if p is not None and not math.isnan(p):
+                close = float(p)
+                pc = getattr(fi, "previous_close", None)
+                prev = float(pc) if (pc is not None and not math.isnan(pc)) else close
+        if close is None:
+            return None
+        change = close - (prev if prev is not None else close)
+        pct = (change / prev * 100) if (prev and prev != 0) else 0.0
+        return {"price": close, "change": change, "pct": pct, "symbol": symbol}
+    except Exception as e:
+        logger.warning(f"yfinance ticker {symbol}: {e}")
+        return None
+
+
+def _get_market_tickers_primary():
+    """Live market tickers leveraging Twelve Data and London Strategic Edge.
+    yfinance is used only as a last-resort per-symbol fallback, not the primary
+    feed. Japan 10Y uses the official MOF CSV (kept unchanged)."""
     tickers = {
-        "DJIA": "^DJI",
-        "Gold": "GC=F",
-        "Oil": "CL=F",
-        "BTC": "BTC-USD",
-        "TNX": "^TNX",
-        "Nasdaq": "^IXIC",
-        "Copper": "HG=F",
-        "PalmOil": "CPO=F",
-        "Nvidia": "NVDA",
-        "Japan10Y": "2561.T"
+        "DJIA": ("DJI", None, "^DJI"),
+        "Gold": ("XAU/USD", "XAU/USD", "GC=F"),
+        "Oil": ("WTI", "WTICO/USD", "CL=F"),
+        "BTC": ("BTC/USD", "BTC/USD", "BTC-USD"),
+        "TNX": ("US10Y", None, "^TNX"),
+        "Nasdaq": ("IXIC", None, "^IXIC"),
+        "Copper": ("XCU/USD", "XCU/USD", "HG=F"),
+        "PalmOil": (None, None, "CPO=F"),
+        "Nvidia": ("NVDA", None, "NVDA"),
+        "Japan10Y": (None, None, "2561.T"),
     }
     results = {}
-
-    # Primary: try official Ministry of Finance Japan JGB 10Y Yield (%)
-    jgb_yield = _get_japan_10y_yield()
-    if jgb_yield:
-        results["Japan10Y"] = jgb_yield
-
-    for name, sym in tickers.items():
+    jgb = _get_japan_10y_yield()
+    if jgb:
+        results["Japan10Y"] = jgb
+    for name, (td_sym, lse_sym, yf_sym) in tickers.items():
         if name in results:
             continue
-        try:
-            t = yf.Ticker(sym)
-            # Fetch 5d to ensure valid close prices even across weekends and holidays
-            h = t.history(period="5d")
-            if not h.empty:
-                h = h.dropna(subset=['Close'])
-            
-            close = None
-            prev = None
-
-            if not h.empty:
-                closes = [float(c) for c in h['Close'] if not math.isnan(c)]
-                if len(closes) >= 1:
-                    close = closes[-1]
-                    prev = closes[-2] if len(closes) >= 2 else close
-
-            # Fallback to fast_info if history is empty or all NaN
-            if close is None:
-                fi = t.fast_info
-                p = getattr(fi, 'last_price', None) or getattr(fi, 'previous_close', None)
-                if p is not None and not math.isnan(p):
-                    close = float(p)
-                    pc = getattr(fi, 'previous_close', None)
-                    prev = float(pc) if (pc is not None and not math.isnan(pc)) else close
-
-            if close is not None:
-                change = close - (prev if prev is not None else close)
-                pct = (change / prev * 100) if (prev and prev != 0) else 0.0
-                results[name] = {
-                    "price": close,
-                    "change": change,
-                    "pct": pct,
-                    "symbol": sym
-                }
-        except Exception as e:
-            logger.warning(f"yfinance ticker {sym}: {e}")
+        quote = _quote_from_td(td_sym) if td_sym else None
+        if quote is None and lse_sym:
+            quote = _quote_from_lse(lse_sym)
+        if quote is None and yf_sym:
+            quote = _quote_from_yf(yf_sym)
+        if quote:
+            results[name] = quote
     return results
 
 
@@ -207,19 +242,19 @@ def _get_market_tickers_fmp():
 
 
 def get_market_tickers():
-    """Get market ticker data. Tries yfinance first, falls back to FMP."""
+    """Get market ticker data. Twelve Data first, LSE second, yfinance last; FMP supplements gaps."""
     now = time.time()
     if now - _ticker_cache["timestamp"] < 30 and _ticker_cache["data"]:
         return _ticker_cache["data"]
     
-    # Try yfinance first
-    results = _get_market_tickers_yfinance()
+    # Twelve Data / London Strategic Edge primary chain
+    results = _get_market_tickers_primary()
     
-    # If yfinance returned very few results, try FMP as supplement/replacement
+    # If TD/LSE returned very few results, try FMP as supplement
     if len(results) < 3:
-        logger.info(f"yfinance returned only {len(results)} tickers, trying FMP fallback.")
+        logger.info(f"TD/LSE returned only {len(results)} tickers, trying FMP fallback.")
         fmp_results = _get_market_tickers_fmp()
-        # Merge: FMP fills gaps, yfinance takes priority where both exist
+        # Merge: FMP fills gaps, primary sources take priority where both exist
         for k, v in fmp_results.items():
             if k not in results:
                 results[k] = v
