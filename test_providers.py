@@ -23,7 +23,7 @@ class ProviderTests(unittest.TestCase):
             twelve.assert_not_called()
 
     def test_lookup_maps_brent_futures_symbol(self):
-        lse_quote = {"symbol": "BRENT", "price": 80}
+        lse_quote = {"symbol": "BCO/USD", "price": 80}
         with patch.object(helpers, "_lookup_lse", side_effect=[None, lse_quote]):
             self.assertEqual(helpers.lookup("BZ=F")["price"], 80)
     def test_lookup_falls_back_to_london_strategic_edge(self):

@@ -265,7 +265,9 @@ def _lookup_lse(symbol):
 
 
 def _provider_symbols(symbol):
-    aliases = {"BZ=F": ["BRENT"], "CL=F": ["WTI", "WTICO/USD"], "GC=F": ["XAU/USD"], "SI=F": ["XAG/USD"]}
+    aliases = {"BZ=F": ["BCO/USD"], "CL=F": ["WTI", "WTICO/USD"], "GC=F": ["XAU/USD"],
+               "SI=F": ["XAG/USD"], "HG=F": ["XCU/USD"], "ZS=F": ["SOYBN/USD"],
+               "ZC=F": ["CORN/USD"], "ZW=F": ["WHEAT/USD"], "NG=F": ["NATGAS/USD"]}
     return [symbol.upper(), *aliases.get(symbol.upper(), [])]
 
 
