@@ -5,7 +5,7 @@ psycopg2-binary==2.9.9
 yfinance>=0.2.54
 requests==2.31.0
 groq==0.4.2
-Werkzeug==2.3.3
+Werkzeug>=2.3.7
 python-dotenv==1.0.0
 gunicorn==21.2.0
 

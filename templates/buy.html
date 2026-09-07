@@ -5,14 +5,142 @@ Buy
 
 {% block main %}
     <h2 class="text-gold">Buy</h2>
-    <form action="/buy" method="post">
+    <form action="/buy" method="post" id="buy-form">
         <div class="mb-3">
-            <input autocomplete="off" autofocus class="form-control mx-auto w-auto" name="symbol" placeholder="Symbol or Name" type="text" list="symbols" required>
+            <input id="symbol-input" autocomplete="off" autofocus class="form-control mx-auto w-auto" name="symbol" placeholder="Symbol or Name" type="text" list="symbols" required>
         </div>
         <div class="mb-3">
-            <input class="form-control mx-auto w-auto" name="shares" type="number" min="1" placeholder="Number of shares" required>
+            <input id="shares-input" class="form-control mx-auto w-auto" name="shares" type="number" min="1" placeholder="Number of shares" required>
         </div>
-        <button class="btn btn-primary" type="submit">Buy</button>
 
+        <div class="transaction-preview-card" id="preview-card">
+            <div class="transaction-summary-title">Order Summary</div>
+            <div class="preview-row">
+                <span class="preview-label">Selected Stock</span>
+                <span class="preview-value" id="preview-stock-name">--</span>
+            </div>
+            <div class="preview-row">
+                <span class="preview-label">Price per Share</span>
+                <span class="preview-value" id="preview-price">$0.00</span>
+            </div>
+            <div class="preview-row">
+                <span class="preview-label">Shares</span>
+                <span class="preview-value" id="preview-shares">0</span>
+            </div>
+            <div class="preview-row">
+                <span class="preview-label">Total Cost</span>
+                <span class="preview-value preview-value-total" id="preview-total">$0.00</span>
+            </div>
+        </div>
+
+        <button class="btn btn-primary" type="submit">Buy</button>
     </form>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const symbolInput = document.getElementById('symbol-input');
+            const sharesInput = document.getElementById('shares-input');
+            const previewCard = document.getElementById('preview-card');
+            const previewStockName = document.getElementById('preview-stock-name');
+            const previewPrice = document.getElementById('preview-price');
+            const previewShares = document.getElementById('preview-shares');
+            const previewTotal = document.getElementById('preview-total');
+
+            let currentPrice = null;
+            let currentSymbol = '';
+            let fetchTimeout = null;
+
+            function formatCurrency(amount) {
+                return new Intl.NumberFormat('en-US', {
+                    style: 'currency',
+                    currency: 'USD',
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                }).format(amount);
+            }
+
+            function updateCalculations() {
+                const shares = parseInt(sharesInput.value, 10);
+                const validShares = !isNaN(shares) && shares > 0 ? shares : 0;
+                previewShares.textContent = validShares.toLocaleString();
+
+                if (currentPrice !== null && validShares > 0) {
+                    const totalCost = currentPrice * validShares;
+                    previewTotal.textContent = formatCurrency(totalCost);
+                    previewCard.classList.add('active');
+                } else if (currentPrice !== null) {
+                    previewTotal.textContent = '$0.00';
+                    previewCard.classList.add('active');
+                } else {
+                    previewTotal.textContent = '$0.00';
+                    previewCard.classList.remove('active');
+                }
+            }
+
+            async function fetchStockQuote(symbol) {
+                if (!symbol || symbol.trim() === '') {
+                    currentPrice = null;
+                    currentSymbol = '';
+                    previewStockName.textContent = '--';
+                    previewPrice.textContent = '$0.00';
+                    updateCalculations();
+                    return;
+                }
+
+                symbol = symbol.trim().toUpperCase();
+                if (symbol === currentSymbol && currentPrice !== null) {
+                    return;
+                }
+
+                previewStockName.innerHTML = '<span class="preview-spinner"></span>';
+                previewPrice.textContent = '...';
+
+                try {
+                    const response = await fetch(`/api/quote?symbol=${encodeURIComponent(symbol)}`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        currentPrice = data.price;
+                        currentSymbol = data.symbol;
+                        previewStockName.textContent = `${data.name} (${data.symbol})`;
+                        previewPrice.textContent = formatCurrency(data.price);
+                    } else {
+                        currentPrice = null;
+                        currentSymbol = '';
+                        previewStockName.textContent = 'Symbol not found';
+                        previewPrice.textContent = '$0.00';
+                    }
+                } catch (e) {
+                    console.error('Quote fetch error:', e);
+                    currentPrice = null;
+                    currentSymbol = '';
+                    previewStockName.textContent = 'Error fetching price';
+                    previewPrice.textContent = '$0.00';
+                }
+                updateCalculations();
+            }
+
+            function handleSymbolChange() {
+                clearTimeout(fetchTimeout);
+                const sym = symbolInput.value.trim();
+                if (!sym) {
+                    fetchStockQuote('');
+                    return;
+                }
+                fetchTimeout = setTimeout(() => {
+                    fetchStockQuote(sym);
+                }, 300);
+            }
+
+            symbolInput.addEventListener('input', handleSymbolChange);
+            symbolInput.addEventListener('change', handleSymbolChange);
+            symbolInput.addEventListener('blur', handleSymbolChange);
+            sharesInput.addEventListener('input', updateCalculations);
+            sharesInput.addEventListener('change', updateCalculations);
+
+            if (symbolInput.value) {
+                handleSymbolChange();
+            }
+        });
+    </script>
 {% endblock %}
+

@@ -171,7 +171,7 @@ def _lookup_fmp(symbol):
             "price_30d": float(price_30d),
             "symbol": symbol.upper(),
             "sector": "",
-            "exchange": quote.get("exchange", "Unknown"),
+            "exchange": quote.get("exchange") or "Unknown",
             "description": "No description available."
         }
     except Exception as e:
@@ -324,17 +324,35 @@ def _is_futures(symbol):
     return s in futures_aliases
 
 
+_metadata_cache = {}
+
+
 def _yahoo_metadata(symbol):
     """Fetch static metadata (sector, exchange, description) from Yahoo Finance quoteSummary.
+    Requires a session cookie + crumb (Yahoo blocks keyless requests since 2024).
     No API key required. Used to enrich Twelve Data / LSE quotes for stocks."""
+    symbol = symbol.upper()
+    if symbol in _metadata_cache:
+        return _metadata_cache[symbol]
+
+    session = requests.Session()
     try:
+        session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"})
+        session.get("https://fc.yahoo.com", timeout=6)
+        resp = session.get("https://query2.finance.yahoo.com/v1/test/getcrumb", timeout=6)
+        if resp.status_code != 200:
+            return {}
+        crumb = resp.text.strip()
+        if not crumb:
+            return {}
+
         url = (
             f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
             "?modules=assetProfile,summaryDetail"
         )
-        headers = {"User-Agent": "Mozilla/5.0"}
-        resp = requests.get(url, headers=headers, timeout=6)
+        resp = session.get(url, params={"crumb": crumb}, timeout=6)
         if resp.status_code != 200:
+            logger.warning("Yahoo quoteSummary HTTP %s for %s", resp.status_code, symbol)
             return {}
         body = resp.json()
         result = (body.get("quoteSummary") or {}).get("result") or []
@@ -344,7 +362,18 @@ def _yahoo_metadata(symbol):
         sector = profile.get("sector") or ""
         description = profile.get("longBusinessSummary") or ""
 
-        # Also read the exchange from a lightweight quote fetch
+        # Also read the exchange from the lightweight v7 quote endpoint
+        try:
+            qresp = session.get(
+                "https://query2.finance.yahoo.com/v7/finance/quote",
+                params={"symbols": symbol, "crumb": crumb},
+                timeout=6,
+            )
+            quote = (qresp.json().get("quoteResponse") or {}).get("result") or []
+            raw_exchange = (quote[0].get("exchange") if quote else "") or ""
+        except Exception:
+            raw_exchange = ""
+
         exchange_map = {
             "NMS": "NASDAQ", "NYQ": "NYSE", "ASE": "NYSE American",
             "NGM": "NASDAQ", "PCX": "NYSE Arca", "TOR": "TSX",
@@ -353,12 +382,15 @@ def _yahoo_metadata(symbol):
             "LSE": "London SE", "FRA": "Frankfurt SE",
             "NCM": "NASDAQ", "BATS": "Cboe BZX", "ENX": "Euronext",
         }
-        raw_exchange = result[0].get("summaryDetail", {}).get("exchange", "")
         exchange = exchange_map.get(raw_exchange, raw_exchange)
-        return {"sector": sector, "exchange": exchange, "description": description}
+        meta = {"sector": sector, "exchange": exchange, "description": description}
+        _metadata_cache[symbol] = meta
+        return meta
     except Exception as e:
         logger.warning("Yahoo metadata fetch failed for %s: %s", symbol, e)
         return {}
+    finally:
+        session.close()
 
 
 def _fmp_profile(symbol):
@@ -371,8 +403,12 @@ def _fmp_profile(symbol):
         url = f"https://financialmodelingprep.com/stable/profile/{symbol}"
         resp = requests.get(url, params={"apikey": fmp_key}, timeout=8)
         if resp.status_code != 200:
+            logger.warning("FMP profile HTTP %s for %s", resp.status_code, symbol)
             return {}
         data = resp.json()
+        if isinstance(data, dict) and data.get("Error Message"):
+            logger.warning("FMP profile error for %s: %s", symbol, data.get("Error Message"))
+            return {}
         profile = data[0] if isinstance(data, list) and data else (data or {})
         exchange_map = {
             "NASDAQ": "NASDAQ", "NYSE": "NYSE", "AMEX": "NYSE American",
@@ -399,16 +435,30 @@ def _enrich_stock_metadata(result, symbol):
     needs_desc = not result.get("description") or result["description"] == "No description available."
     if not (needs_sector or needs_exchange or needs_desc):
         return
-    # Try FMP first (accurate exchange names), then Yahoo
-    meta = _fmp_profile(symbol) if os.environ.get("FMP_API_KEY") else {}
-    if not meta.get("sector") and not meta.get("description"):
-        meta = _yahoo_metadata(symbol)
+    
+    meta = {}
+    # Try FMP first (accurate exchange names)
+    if os.environ.get("FMP_API_KEY"):
+        meta = _fmp_profile(symbol)
+    
+    # Fill remaining gaps from Yahoo
+    if needs_sector and not meta.get("sector") or needs_desc and not meta.get("description") or needs_exchange and not meta.get("exchange"):
+        yahoo_meta = _yahoo_metadata(symbol)
+        if yahoo_meta:
+            meta = {k: v or meta.get(k) for k, v in yahoo_meta.items()}
+    
     if needs_sector and meta.get("sector"):
         result["sector"] = meta["sector"]
     if needs_exchange and meta.get("exchange"):
         result["exchange"] = meta["exchange"]
     if needs_desc and meta.get("description"):
         result["description"] = meta["description"]
+    
+    # Log if metadata still missing after enrichment attempts
+    if needs_sector and not result.get("sector"):
+        logger.warning("Metadata enrichment: sector still empty for %s", symbol)
+    if needs_exchange and not result.get("exchange"):
+        logger.warning("Metadata enrichment: exchange still empty for %s", symbol)
 
 
 def _provider_symbols(symbol):

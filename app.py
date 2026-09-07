@@ -381,7 +381,7 @@ def index():
                 "value": value,
                 "pl": profit_loss,
                 "pl_pct": profit_loss_pct,
-                "exchange": quote.get("exchange", "Unknown")
+                "exchange": quote.get("exchange") or "Unknown"
             })
     
     # Calculate cash metrics
