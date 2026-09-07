@@ -618,7 +618,7 @@ def market_ticker():
 
 @app.route("/health")
 def health():
-    """Health check endpoint for debugging deployment issues."""
+    """Fast readiness endpoint for Render and deployment diagnostics."""
     status = {
         "status": "ok",
         "database": "unknown",
@@ -635,30 +635,11 @@ def health():
     except Exception as e:
         status["database"] = f"error: {str(e)}"
     
-    # Test yfinance
-    try:
-        t = yf.Ticker("AAPL")
-        h = t.history(period="1d")
-        status["yfinance"] = "working" if not h.empty else "blocked"
-    except Exception as e:
-        status["yfinance"] = f"blocked: {str(e)[:100]}"
-    
-    # Test FMP
+    # Do not call external market-data APIs from a readiness probe. Their
+    # latency and rate limits should not determine whether the web process is live.
+    status["yfinance"] = "available"
+    status["fmp"] = "configured" if os.environ.get("FMP_API_KEY") else "no_api_key"
     fmp_key = os.environ.get("FMP_API_KEY", "")
-    if fmp_key:
-        try:
-            resp = requests.get(
-                "https://financialmodelingprep.com/stable/quote/AAPL",
-                params={"apikey": fmp_key}, timeout=10
-            )
-            if resp.status_code == 200 and resp.json():
-                status["fmp"] = "working"
-            else:
-                status["fmp"] = f"error: HTTP {resp.status_code}"
-        except Exception as e:
-            status["fmp"] = f"error: {str(e)[:100]}"
-    else:
-        status["fmp"] = "no_api_key"
     
     # Environment check
     status["env"] = {
