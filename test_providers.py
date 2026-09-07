@@ -14,16 +14,13 @@ class ProviderTests(unittest.TestCase):
             twelve.assert_called_once_with("AAPL")
             fmp.assert_not_called()
 
-    def test_lookup_prefers_london_strategic_edge_for_live_prices(self):
-        lse_quote = {"symbol": "AAPL", "price": 200}
-        with patch.object(helpers, "_lookup_lse", return_value=lse_quote) as lse, \
-                patch.object(helpers, "_lookup_twelvedata") as twelve, \
-                patch.object(helpers, "_twelvedata_quote", return_value={"name": "Apple Inc.", "exchange": "NASDAQ"}):
-            self.assertEqual(helpers.lookup("AAPL"), lse_quote)
-            self.assertEqual(lse_quote["name"], "Apple Inc.")
-            self.assertEqual(lse_quote["exchange"], "NASDAQ")
-            lse.assert_called_once_with("AAPL")
-            twelve.assert_not_called()
+    def test_lookup_prefers_twelve_data_for_live_prices(self):
+        twelve_quote = {"symbol": "AAPL", "price": 200}
+        with patch.object(helpers, "_lookup_twelvedata", return_value=twelve_quote) as twelve, \
+                patch.object(helpers, "_lookup_lse") as lse:
+            self.assertEqual(helpers.lookup("AAPL"), twelve_quote)
+            twelve.assert_called_once_with("AAPL")
+            lse.assert_not_called()
 
     def test_lookup_maps_brent_futures_symbol(self):
         twelve_quote = {"symbol": "BZ=F", "price": 97.25}
@@ -33,7 +30,7 @@ class ProviderTests(unittest.TestCase):
     def test_lookup_preserves_futures_exchange_when_metadata_is_unavailable(self):
         self.assertEqual(helpers._fallback_exchange("BZ=F"), "ICE")
 
-    def test_brent_future_does_not_use_lse_reference_price(self):
+    def test_twelve_data_precedes_lse_for_brent(self):
         twelve_quote = {"symbol": "BZ=F", "price": 97.25}
         with patch.object(helpers, "_lookup_lse") as lse, \
                 patch.object(helpers, "_lookup_twelvedata", return_value=twelve_quote):
