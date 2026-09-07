@@ -226,7 +226,7 @@ def _lookup_twelvedata(symbol):
             "description": "No description available."}
 
 
-def _lse_candles(symbol, limit=35, timeframe="1d"):
+def _lse_candles(symbol, limit=35, timeframe="1d", order="asc"):
     """Fetch candles from London Strategic Edge."""
     api_key = os.environ.get("LSE_API_KEY", "")
     if not api_key:
@@ -234,7 +234,7 @@ def _lse_candles(symbol, limit=35, timeframe="1d"):
     response = requests.get(
         f"{os.environ.get('LSE_API_URL', 'https://api.londonstrategicedge.com/vault').rstrip('/')}/candles",
         headers={"x-api-key": api_key},
-        params={"symbol": symbol, "timeframe": timeframe, "limit": limit, "order": "asc"},
+        params={"symbol": symbol, "timeframe": timeframe, "limit": limit, "order": order},
         timeout=10,
     )
     response.raise_for_status()
@@ -245,7 +245,7 @@ def _lse_candles(symbol, limit=35, timeframe="1d"):
 def _lookup_lse(symbol):
     """Look up a live quote and recent performance using London Strategic Edge."""
     try:
-        rows = _lse_candles(symbol, limit=2, timeframe="1m")
+        rows = _lse_candles(symbol, limit=1, timeframe="1m", order="desc")
     except Exception:
         rows = []
     try:
@@ -258,7 +258,7 @@ def _lookup_lse(symbol):
     if not closes:
         return None
     daily_closes = [float(row["close"]) for row in daily_rows if row.get("close") is not None]
-    return {"name": symbol.upper(), "price": closes[-1],
+    return {"name": symbol.upper(), "price": closes[0],
             "price_7d": daily_closes[-6] if len(daily_closes) >= 6 else closes[0],
             "price_30d": daily_closes[0] if daily_closes else closes[0], "symbol": symbol.upper(),
             "sector": "", "exchange": "London Strategic Edge", "description": "No description available."}

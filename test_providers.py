@@ -73,6 +73,16 @@ class ProviderTests(unittest.TestCase):
         self.assertIsNotNone(history)
         self.assertEqual(history["close"][-1], 139.0)
 
+    def test_lse_live_quote_requests_newest_candle(self):
+        with patch.dict(os.environ, {"LSE_API_KEY": "lse_live_test"}), \
+                patch.object(helpers, "_lse_candles", side_effect=[
+                    [{"close": 125}],
+                    [{"close": 120}, {"close": 121}],
+                ]) as candles:
+            quote = helpers._lookup_lse("BRENT")
+        self.assertEqual(quote["price"], 125)
+        self.assertEqual(candles.call_args_list[0].kwargs, {"limit": 1, "timeframe": "1m", "order": "desc"})
+
 
 if __name__ == "__main__":
     unittest.main()

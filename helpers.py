@@ -245,7 +245,7 @@ def _lookup_twelvedata(symbol):
     }
 
 
-def _lse_candles(symbol, limit=35, timeframe="1d"):
+def _lse_candles(symbol, limit=35, timeframe="1d", order="asc"):
     """Fetch candles from the London Strategic Edge market-data API."""
     api_key = os.environ.get("LSE_API_KEY", "")
     if not api_key:
@@ -260,7 +260,7 @@ def _lse_candles(symbol, limit=35, timeframe="1d"):
             "symbol": symbol,
             "timeframe": timeframe,
             "limit": limit,
-            "order": "asc",
+            "order": order,
         },
         timeout=10,
     )
@@ -275,7 +275,7 @@ def _lse_candles(symbol, limit=35, timeframe="1d"):
 def _lookup_lse(symbol):
     """Look up a live quote and recent performance using LSE candles."""
     try:
-        rows = _lse_candles(symbol, limit=2, timeframe="1m")
+        rows = _lse_candles(symbol, limit=1, timeframe="1m", order="desc")
     except Exception as e:
         logger.warning("London Strategic Edge intraday data failed for %s: %s", symbol, e)
         rows = []
@@ -292,7 +292,7 @@ def _lookup_lse(symbol):
     daily_closes = [float(row["close"]) for row in daily_rows if row.get("close") is not None]
     return {
         "name": symbol.upper(),
-        "price": closes[-1],
+        "price": closes[0],
         "price_7d": daily_closes[-6] if len(daily_closes) >= 6 else closes[0],
         "price_30d": daily_closes[0] if daily_closes else closes[0],
         "symbol": symbol.upper(),
