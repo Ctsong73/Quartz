@@ -597,8 +597,15 @@ def market_ticker():
 
 @app.route("/health")
 def health():
-    """Health check endpoint for debugging deployment issues."""
-    status = {"status": "ok", "database": "unknown", "yfinance": "unknown", "fmp": "unknown"}
+    """Fast readiness endpoint for Render and deployment diagnostics."""
+    status = {
+        "status": "ok",
+        "database": "unknown",
+        "twelvedata": "configured" if os.environ.get("TWELVE_DATA_API_KEY") or os.environ.get("TWELVEDATA_API_KEY") else "no_api_key",
+        "london_strategic_edge": "configured" if os.environ.get("LSE_API_KEY") else "no_api_key",
+        "yfinance": "available",
+        "fmp": "configured" if os.environ.get("FMP_API_KEY") else "no_api_key",
+    }
     
     # Test database connection
     try:
@@ -607,30 +614,7 @@ def health():
     except Exception as e:
         status["database"] = f"error: {str(e)}"
     
-    # Test yfinance
-    try:
-        t = yf.Ticker("AAPL")
-        h = t.history(period="1d")
-        status["yfinance"] = "working" if not h.empty else "blocked"
-    except Exception as e:
-        status["yfinance"] = f"blocked: {str(e)[:100]}"
-    
-    # Test FMP
     fmp_key = os.environ.get("FMP_API_KEY", "")
-    if fmp_key:
-        try:
-            resp = requests.get(
-                "https://financialmodelingprep.com/stable/quote/AAPL",
-                params={"apikey": fmp_key}, timeout=10
-            )
-            if resp.status_code == 200 and resp.json():
-                status["fmp"] = "working"
-            else:
-                status["fmp"] = f"error: HTTP {resp.status_code}"
-        except Exception as e:
-            status["fmp"] = f"error: {str(e)[:100]}"
-    else:
-        status["fmp"] = "no_api_key"
     
     # Environment check
     status["env"] = {
@@ -638,6 +622,8 @@ def health():
         "DATABASE_URL": bool(os.environ.get("DATABASE_URL")),
         "SECRET_KEY": bool(os.environ.get("SECRET_KEY")),
         "FMP_API_KEY": bool(fmp_key),
+        "TWELVE_DATA_API_KEY": bool(os.environ.get("TWELVE_DATA_API_KEY") or os.environ.get("TWELVEDATA_API_KEY")),
+        "LSE_API_KEY": bool(os.environ.get("LSE_API_KEY")),
         "GROQ_API_KEY": bool(os.environ.get("GROQ_API_KEY")),
     }
     

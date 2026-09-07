@@ -178,25 +178,110 @@ def _lookup_fmp(symbol):
         return None
 
 
+def _twelvedata_series(symbol, outputsize=35):
+    """Fetch daily OHLCV data from Twelve Data."""
+    api_key = os.environ.get("TWELVE_DATA_API_KEY") or os.environ.get("TWELVEDATA_API_KEY", "")
+    if not api_key:
+        return []
+    response = requests.get(
+        "https://api.twelvedata.com/time_series",
+        params={"symbol": symbol, "interval": "1day", "outputsize": outputsize, "order": "ASC", "apikey": api_key},
+        timeout=10,
+    )
+    response.raise_for_status()
+    data = response.json()
+    if data.get("status") == "error" or "values" not in data:
+        return []
+    return data["values"]
+
+
+def _twelvedata_quote(symbol):
+    """Fetch the latest quote from Twelve Data."""
+    api_key = os.environ.get("TWELVE_DATA_API_KEY") or os.environ.get("TWELVEDATA_API_KEY", "")
+    if not api_key:
+        return None
+    response = requests.get("https://api.twelvedata.com/quote", params={"symbol": symbol, "apikey": api_key}, timeout=10)
+    response.raise_for_status()
+    data = response.json()
+    return None if data.get("status") == "error" or not data.get("close") else data
+
+
+def _lookup_twelvedata(symbol):
+    """Look up a live quote and recent performance using Twelve Data."""
+    quote = _twelvedata_quote(symbol)
+    try:
+        rows = _twelvedata_series(symbol)
+    except Exception as e:
+        logger.warning("Twelve Data history failed for %s: %s", symbol, e)
+        rows = []
+    closes = [float(row["close"]) for row in rows if row.get("close") is not None]
+    if not quote and not closes:
+        return None
+    price = float(quote["close"]) if quote else closes[-1]
+    previous_close = float(quote.get("previous_close", price)) if quote else price
+    return {"name": (quote or {}).get("name") or symbol.upper(), "price": price,
+            "price_7d": closes[-6] if len(closes) >= 6 else previous_close,
+            "price_30d": closes[0] if closes else previous_close, "symbol": symbol.upper(),
+            "sector": "", "exchange": (quote or {}).get("exchange") or "Twelve Data",
+            "description": "No description available."}
+
+
+def _lse_candles(symbol, limit=35, timeframe="1d"):
+    """Fetch candles from London Strategic Edge."""
+    api_key = os.environ.get("LSE_API_KEY", "")
+    if not api_key:
+        return []
+    response = requests.get(
+        f"{os.environ.get('LSE_API_URL', 'https://api.londonstrategicedge.com/vault').rstrip('/')}/candles",
+        headers={"x-api-key": api_key},
+        params={"symbol": symbol, "timeframe": timeframe, "limit": limit, "order": "asc"},
+        timeout=10,
+    )
+    response.raise_for_status()
+    data = response.json()
+    return data if isinstance(data, list) else []
+
+
+def _lookup_lse(symbol):
+    """Look up a live quote and recent performance using London Strategic Edge."""
+    try:
+        rows = _lse_candles(symbol, limit=2, timeframe="1m")
+    except Exception:
+        rows = []
+    try:
+        daily_rows = _lse_candles(symbol, limit=35, timeframe="1d")
+    except Exception:
+        daily_rows = []
+    if not rows:
+        rows = daily_rows
+    closes = [float(row["close"]) for row in rows if row.get("close") is not None]
+    if not closes:
+        return None
+    daily_closes = [float(row["close"]) for row in daily_rows if row.get("close") is not None]
+    return {"name": symbol.upper(), "price": closes[-1],
+            "price_7d": daily_closes[-6] if len(daily_closes) >= 6 else closes[0],
+            "price_30d": daily_closes[0] if daily_closes else closes[0], "symbol": symbol.upper(),
+            "sector": "", "exchange": "London Strategic Edge", "description": "No description available."}
+
+
+def _provider_symbols(symbol):
+    aliases = {"BZ=F": ["BRENT"], "CL=F": ["WTI", "WTICO/USD"], "GC=F": ["XAU/USD"], "SI=F": ["XAG/USD"]}
+    return [symbol.upper(), *aliases.get(symbol.upper(), [])]
+
+
 def lookup(symbol):
-    """Look up quote for symbol. Tries yfinance first, falls back to FMP on cloud servers."""
-    # Try yfinance first (fast, no API key needed, works locally)
-    try:
-        result = _lookup_yfinance(symbol)
-        if result:
-            return result
-        logger.info(f"yfinance returned no data for {symbol}, trying FMP fallback.")
-    except Exception as e:
-        logger.warning(f"yfinance failed for {symbol}: {e} — trying FMP fallback.")
-    
-    # Fallback to Financial Modeling Prep (works on cloud servers)
-    try:
-        result = _lookup_fmp(symbol)
-        if result:
-            return result
-    except Exception as e:
-        logger.error(f"FMP fallback also failed for {symbol}: {e}")
-    
+    """Look up a quote using live providers before legacy fallbacks."""
+    providers = (("London Strategic Edge", _lookup_lse), ("Twelve Data", _lookup_twelvedata),
+                 ("FMP", _lookup_fmp), ("yfinance", _lookup_yfinance))
+    for name, provider in providers:
+        for provider_symbol in _provider_symbols(symbol):
+            try:
+                result = provider(provider_symbol)
+                if result:
+                    result["symbol"] = symbol.upper()
+                    return result
+            except Exception as e:
+                logger.warning("%s lookup failed for %s: %s", name, provider_symbol, e)
     return None
 
 def search_symbol(query):
@@ -225,50 +310,61 @@ def search_symbol(query):
         return []
 
 
+def _history_from_rows(rows):
+    if len(rows) < 27:
+        return None
+    closes = [row["close"] for row in rows]
+    def rolling_mean(values, index, window):
+        return None if index < window - 1 else sum(values[index - window + 1:index + 1]) / window
+    ma10 = [rolling_mean(closes, i, 10) for i in range(len(closes))]
+    ma20 = [rolling_mean(closes, i, 20) for i in range(len(closes))]
+    gains = [max(closes[i] - closes[i - 1], 0) for i in range(1, len(closes))]
+    losses = [max(closes[i - 1] - closes[i], 0) for i in range(1, len(closes))]
+    rsi = [None] * len(closes)
+    for i in range(14, len(closes)):
+        avg_gain = sum(gains[i - 14:i]) / 14
+        avg_loss = sum(losses[i - 14:i]) / 14
+        rsi[i] = 100 if avg_loss == 0 else 100 - (100 / (1 + avg_gain / avg_loss))
+    roc7 = [None if i < 7 else ((closes[i] - closes[i - 7]) / closes[i - 7]) * 100 for i in range(len(closes))]
+    roc7_ma7 = [rolling_mean([value or 0 for value in roc7], i, 7) if i >= 13 else None for i in range(len(closes))]
+    start = next((i for i in range(len(closes)) if None not in (ma10[i], ma20[i], rsi[i], roc7[i], roc7_ma7[i])), None)
+    if start is None:
+        return None
+    return {"dates": [row["date"] for row in rows[start:]], "open": [row["open"] for row in rows[start:]],
+            "high": [row["high"] for row in rows[start:]], "low": [row["low"] for row in rows[start:]],
+            "close": closes[start:], "ma10": ma10[start:], "ma20": ma20[start:], "roc7": roc7[start:],
+            "roc7_ma7": roc7_ma7[start:], "rsi": rsi[start:]}
+
+
 def get_history(symbol):
-    """Fetch 3 months of historical data with technical indicators."""
+    """Fetch history using Twelve Data, London Strategic Edge, then yfinance."""
+    providers = []
+    if os.environ.get("TWELVE_DATA_API_KEY") or os.environ.get("TWELVEDATA_API_KEY"):
+        providers.append(("Twelve Data", lambda: _twelvedata_series(symbol.upper(), outputsize=90)))
+    if os.environ.get("LSE_API_KEY"):
+        providers.append(("London Strategic Edge", lambda: _lse_candles(symbol.upper(), limit=90, timeframe="1d")))
+    for name, fetch in providers:
+        try:
+            rows = [{"date": str(row.get("t", row.get("ts", row.get("datetime", ""))))[:10],
+                     "open": float(row.get("o", row.get("open"))), "high": float(row.get("h", row.get("high"))),
+                     "low": float(row.get("l", row.get("low"))), "close": float(row.get("c", row.get("close")))}
+                    for row in fetch()]
+            history = _history_from_rows(rows)
+            if history:
+                return history
+        except Exception as e:
+            logger.warning("%s history failed for %s: %s", name, symbol, e)
     try:
-        ticker = yf.Ticker(symbol)
-        df = ticker.history(period="3mo")
-        if df.empty:
+        ticker = yf.Ticker(symbol.upper())
+        data = ticker.history(period="3mo")
+        if data.empty:
             return None
-            
-        # Calculate Moving Averages
-        df['MA10'] = df['Close'].rolling(window=10).mean()
-        df['MA20'] = df['Close'].rolling(window=20).mean()
-        
-        # Calculate RSI (14-day)
-        delta = df['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
-        df['RSI'] = 100 - (100 / (1 + rs))
-        
-        # Calculate 7-day ROC
-        df['ROC7'] = ((df['Close'] - df['Close'].shift(7)) / df['Close'].shift(7)) * 100
-        
-        # Calculate 7-day MA of ROC (Signal Line)
-        df['ROC7_MA7'] = df['ROC7'].rolling(window=7).mean()
-        
-        # Drop NaN values (first few days of MA/ROC/RSI calculation)
-        df = df.dropna()
-        if df.empty:
-            return None
-        
-        return {
-            "dates": df.index.strftime('%Y-%m-%d').tolist(),
-            "open": df['Open'].tolist(),
-            "high": df['High'].tolist(),
-            "low": df['Low'].tolist(),
-            "close": df['Close'].tolist(),
-            "ma10": df['MA10'].tolist(),
-            "ma20": df['MA20'].tolist(),
-            "roc7": df['ROC7'].tolist(),
-            "roc7_ma7": df['ROC7_MA7'].tolist(),
-            "rsi": df['RSI'].tolist()
-        }
+        rows = [{"date": index.strftime("%Y-%m-%d"), "open": float(row["Open"]), "high": float(row["High"]),
+                 "low": float(row["Low"]), "close": float(row["Close"])}
+                for index, row in data.dropna(subset=["Open", "High", "Low", "Close"]).iterrows()]
+        return _history_from_rows(rows)
     except Exception as e:
-        print(f"Error fetching history for {symbol}: {e}")
+        logger.warning("yfinance history failed for %s: %s", symbol, e)
         return None
 
 
