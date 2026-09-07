@@ -5,6 +5,7 @@ import time
 import traceback
 import requests
 import threading
+from flask import jsonify
 
 # Configure basic logging
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s in %(module)s: %(message)s')
@@ -380,7 +381,7 @@ def index():
                 "value": value,
                 "pl": profit_loss,
                 "pl_pct": profit_loss_pct,
-                "exchange": quote.get("exchange", "Unknown")
+                "exchange": quote.get("exchange") or "Unknown"
             })
     
     # Calculate cash metrics
@@ -585,9 +586,29 @@ def search():
     q = request.args.get("q", "")
     if not q:
         return jsonify([])
-    
+
     results = search_symbol(q)
     return jsonify(results)
+
+@app.route("/api/quote")
+@login_required
+def api_quote():
+    """API endpoint to get live quote and price for a single symbol"""
+    symbol = request.args.get("symbol", "").strip().upper()
+    if not symbol:
+        return jsonify({"error": "Symbol is required"}), 400
+
+    quote = lookup(symbol)
+    if not quote:
+        return jsonify({"error": "Symbol not found"}), 404
+
+    price = float(quote["price"])
+    return jsonify({
+        "symbol": quote["symbol"],
+        "name": quote.get("name", quote["symbol"]),
+        "price": price,
+        "formatted_price": usd(price)
+    })
 
 @app.route("/api/market_ticker")
 def market_ticker():
@@ -603,8 +624,8 @@ def health():
         "database": "unknown",
         "twelvedata": "configured" if os.environ.get("TWELVE_DATA_API_KEY") or os.environ.get("TWELVEDATA_API_KEY") else "no_api_key",
         "london_strategic_edge": "configured" if os.environ.get("LSE_API_KEY") else "no_api_key",
-        "yfinance": "available",
-        "fmp": "configured" if os.environ.get("FMP_API_KEY") else "no_api_key",
+        "yfinance": "unknown",
+        "fmp": "unknown",
     }
     
     # Test database connection
@@ -614,6 +635,10 @@ def health():
     except Exception as e:
         status["database"] = f"error: {str(e)}"
     
+    # Do not call external market-data APIs from a readiness probe. Their
+    # latency and rate limits should not determine whether the web process is live.
+    status["yfinance"] = "available"
+    status["fmp"] = "configured" if os.environ.get("FMP_API_KEY") else "no_api_key"
     fmp_key = os.environ.get("FMP_API_KEY", "")
     
     # Environment check

@@ -2,6 +2,7 @@ import yfinance as yf
 import math
 import os
 import logging
+import time
 
 from flask import redirect, render_template, session
 from functools import wraps
@@ -243,11 +244,15 @@ def _lookup_twelvedata(symbol):
     }
     raw_exchange = (quote or {}).get("exchange") or ""
     exchange = exchange_map.get(raw_exchange, raw_exchange) or ""
+    # ~5 trading days ≈ 7 calendar days; ~22 trading days ≈ 30 calendar days.
+    # closes[0] with outputsize=35 is ~49 calendar days back, which distorted "monthly".
+    price_7d = closes[-5] if len(closes) >= 5 else previous_close
+    price_30d = closes[-22] if len(closes) >= 22 else (closes[0] if closes else previous_close)
     return {
         "name": (quote or {}).get("name") or symbol.upper(),
         "price": price,
-        "price_7d": closes[-6] if len(closes) >= 6 else previous_close,
-        "price_30d": closes[0] if closes else previous_close,
+        "price_7d": price_7d,
+        "price_30d": price_30d,
         "symbol": symbol.upper(),
         "sector": "",
         "exchange": exchange,
@@ -300,11 +305,13 @@ def _lookup_lse(symbol):
     if not closes:
         return None
     daily_closes = [float(row["close"]) for row in daily_rows if row.get("close") is not None]
+    price_7d = daily_closes[-5] if len(daily_closes) >= 5 else closes[0]
+    price_30d = daily_closes[-22] if len(daily_closes) >= 22 else (daily_closes[0] if daily_closes else closes[0])
     return {
         "name": symbol.upper(),
         "price": closes[0],
-        "price_7d": daily_closes[-6] if len(daily_closes) >= 6 else closes[0],
-        "price_30d": daily_closes[0] if daily_closes else closes[0],
+        "price_7d": price_7d,
+        "price_30d": price_30d,
         "symbol": symbol.upper(),
         "sector": "",
         "exchange": "London Strategic Edge",
@@ -325,6 +332,18 @@ def _is_futures(symbol):
 
 
 _metadata_cache = {}
+_METADATA_TTL = 3600  # second(s); static sector/exchange data barely changes
+
+
+def _meta_get(symbol):
+    entry = _metadata_cache.get(symbol)
+    if entry and time.time() - entry[0] < _METADATA_TTL:
+        return entry[1]
+    return None
+
+
+def _meta_set(symbol, meta):
+    _metadata_cache[symbol] = (time.time(), meta)
 
 
 def _yahoo_metadata(symbol):
@@ -332,31 +351,36 @@ def _yahoo_metadata(symbol):
     Requires a session cookie + crumb (Yahoo blocks keyless requests since 2024).
     No API key required. Used to enrich Twelve Data / LSE quotes for stocks."""
     symbol = symbol.upper()
-    if symbol in _metadata_cache:
-        return _metadata_cache[symbol]
+    cached = _meta_get(symbol)
+    if cached is not None:
+        return cached
 
     session = requests.Session()
     try:
         session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"})
-        session.get("https://fc.yahoo.com", timeout=6)
-        resp = session.get("https://query2.finance.yahoo.com/v1/test/getcrumb", timeout=6)
+        session.get("https://fc.yahoo.com", timeout=4)
+        resp = session.get("https://query2.finance.yahoo.com/v1/test/getcrumb", timeout=4)
         if resp.status_code != 200:
+            _meta_set(symbol, {})
             return {}
         crumb = resp.text.strip()
         if not crumb:
+            _meta_set(symbol, {})
             return {}
 
         url = (
             f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
             "?modules=assetProfile,summaryDetail"
         )
-        resp = session.get(url, params={"crumb": crumb}, timeout=6)
+        resp = session.get(url, params={"crumb": crumb}, timeout=4)
         if resp.status_code != 200:
             logger.warning("Yahoo quoteSummary HTTP %s for %s", resp.status_code, symbol)
+            _meta_set(symbol, {})
             return {}
         body = resp.json()
         result = (body.get("quoteSummary") or {}).get("result") or []
         if not result:
+            _meta_set(symbol, {})
             return {}
         profile = result[0].get("assetProfile") or {}
         sector = profile.get("sector") or ""
@@ -367,7 +391,7 @@ def _yahoo_metadata(symbol):
             qresp = session.get(
                 "https://query2.finance.yahoo.com/v7/finance/quote",
                 params={"symbols": symbol, "crumb": crumb},
-                timeout=6,
+                timeout=4,
             )
             quote = (qresp.json().get("quoteResponse") or {}).get("result") or []
             raw_exchange = (quote[0].get("exchange") if quote else "") or ""
@@ -384,10 +408,11 @@ def _yahoo_metadata(symbol):
         }
         exchange = exchange_map.get(raw_exchange, raw_exchange)
         meta = {"sector": sector, "exchange": exchange, "description": description}
-        _metadata_cache[symbol] = meta
+        _meta_set(symbol, meta)
         return meta
     except Exception as e:
         logger.warning("Yahoo metadata fetch failed for %s: %s", symbol, e)
+        _meta_set(symbol, {})
         return {}
     finally:
         session.close()
@@ -396,6 +421,10 @@ def _yahoo_metadata(symbol):
 def _fmp_profile(symbol):
     """Fetch static metadata (sector, exchange, description) from FMP profile endpoint.
     Only called when FMP_API_KEY is present. Used as an alternative to Yahoo metadata."""
+    symbol = symbol.upper()
+    cached = _meta_get(symbol)
+    if cached is not None:
+        return cached
     fmp_key = os.environ.get("FMP_API_KEY", "")
     if not fmp_key:
         return {}
@@ -404,10 +433,12 @@ def _fmp_profile(symbol):
         resp = requests.get(url, params={"apikey": fmp_key}, timeout=8)
         if resp.status_code != 200:
             logger.warning("FMP profile HTTP %s for %s", resp.status_code, symbol)
+            _meta_set(symbol, {})
             return {}
         data = resp.json()
         if isinstance(data, dict) and data.get("Error Message"):
             logger.warning("FMP profile error for %s: %s", symbol, data.get("Error Message"))
+            _meta_set(symbol, {})
             return {}
         profile = data[0] if isinstance(data, list) and data else (data or {})
         exchange_map = {
@@ -417,13 +448,16 @@ def _fmp_profile(symbol):
         }
         raw_ex = profile.get("exchangeShortName") or profile.get("exchange") or ""
         exchange = exchange_map.get(raw_ex.upper(), raw_ex)
-        return {
+        meta = {
             "sector": profile.get("sector") or "",
             "exchange": exchange,
             "description": profile.get("description") or "",
         }
+        _meta_set(symbol, meta)
+        return meta
     except Exception as e:
         logger.warning("FMP profile fetch failed for %s: %s", symbol, e)
+        _meta_set(symbol, {})
         return {}
 
 
@@ -463,12 +497,13 @@ def _enrich_stock_metadata(result, symbol):
 
 def _provider_symbols(symbol):
     """Return provider-compatible aliases for common Yahoo futures symbols.
-    UKOIL is listed before BCO/USD for Brent because it maps to the ICE front-month
-    contract (matching CNBC/Bloomberg quotes), whereas BCO/USD can track the
-    generic/continuous next-nearby contract which trades ~$1-2 higher."""
+    UKOIL precedes BZ=F for Brent because it maps to the ICE front-month
+    contract (matching CNBC/Bloomberg quotes), whereas some feeds expose the
+    generic/continuous next-nearby contract which trades ~$1-2 higher. Each
+    provider tries these in order, so the front-month alias must come first."""
     aliases = {
-        "BZ=F": ["UKOIL", "BCO/USD"],
-        "CL=F": ["WTI", "WTICO/USD"],
+        "BZ=F": ["UKOIL", "BZ=F", "BCO/USD"],
+        "CL=F": ["WTI", "CL=F", "WTICO/USD"],
         "GC=F": ["XAU/USD"],
         "SI=F": ["XAG/USD"],
         "HG=F": ["XCU/USD"],
@@ -477,7 +512,7 @@ def _provider_symbols(symbol):
         "ZW=F": ["WHEAT/USD"],
         "NG=F": ["NATGAS/USD"],
     }
-    return [symbol.upper(), *aliases.get(symbol.upper(), [])]
+    return [symbol.upper(), *aliases.get(symbol.upper(), [])] if symbol.upper() not in ("BZ=F", "CL=F") else [*aliases[symbol.upper()]]
 
 
 def _fallback_exchange(symbol):
