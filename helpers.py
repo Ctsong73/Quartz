@@ -333,6 +333,21 @@ def _fallback_exchange(symbol):
     return exchanges.get(symbol.upper(), "Unknown")
 
 
+def _display_metadata(symbol):
+    metadata = {
+        "BZ=F": ("Brent Crude Oil", "NYMEX", 1),
+        "CL=F": ("WTI Crude Oil", "NYMEX", 1),
+        "GC=F": ("Gold Futures", "COMEX", 1),
+        "SI=F": ("Silver Futures", "COMEX", 1),
+        "HG=F": ("Copper Futures", "COMEX", 1),
+        "ZS=F": ("Soybean Futures", "CBOT", 100),
+        "ZC=F": ("Corn Futures", "CBOT", 100),
+        "ZW=F": ("Wheat Futures", "CBOT", 100),
+        "NG=F": ("Natural Gas Futures", "NYMEX", 1),
+    }
+    return metadata.get(symbol.upper(), (None, None, 1))
+
+
 def lookup(symbol):
     """Look up a quote using configured providers in reliability order."""
     providers = (
@@ -351,8 +366,12 @@ def lookup(symbol):
                             metadata = _twelvedata_quote(provider_symbol) or {}
                         except Exception:
                             metadata = {}
-                        result["name"] = metadata.get("name") or result.get("name") or symbol.upper()
-                        result["exchange"] = metadata.get("exchange") or _fallback_exchange(symbol)
+                        display_name, display_exchange, multiplier = _display_metadata(symbol)
+                        result["name"] = display_name or metadata.get("name") or result.get("name") or symbol.upper()
+                        result["exchange"] = display_exchange or metadata.get("exchange") or _fallback_exchange(symbol)
+                        for field in ("price", "price_7d", "price_30d"):
+                            if field in result:
+                                result[field] = float(result[field]) * multiplier
                     result["symbol"] = symbol.upper()
                     return result
             except Exception as e:

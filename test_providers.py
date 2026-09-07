@@ -36,6 +36,15 @@ class ProviderTests(unittest.TestCase):
                 patch.object(helpers, "_twelvedata_quote", return_value=None):
             quote = helpers.lookup("BZ=F")
         self.assertEqual(quote["exchange"], "NYMEX")
+
+    def test_lookup_converts_lse_soybean_units(self):
+        lse_quote = {"symbol": "SOYBN/USD", "price": 12.964, "price_7d": 13.1, "price_30d": 13.2}
+        with patch.object(helpers, "_lookup_lse", return_value=lse_quote), \
+                patch.object(helpers, "_twelvedata_quote", return_value=None):
+            quote = helpers.lookup("ZS=F")
+        self.assertEqual(quote["price"], 1296.4)
+        self.assertEqual(quote["name"], "Soybean Futures")
+        self.assertEqual(quote["exchange"], "CBOT")
     def test_lookup_falls_back_to_london_strategic_edge(self):
         lse_quote = {"symbol": "AAPL", "price": 200}
         with patch.object(helpers, "_lookup_twelvedata", return_value=None), \
