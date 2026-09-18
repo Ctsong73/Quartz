@@ -51,19 +51,42 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(quote["name"], "Soybean Futures")
         self.assertEqual(quote["exchange"], "CBOT")
     def test_yahoo_is_final_fallback_for_futures(self):
-        """Yahoo is the last resort: TD, LSE, FMP, then yfinance all tried first."""
-        yahoo_quote = {"symbol": "BZ=F", "price": 96.28, "price_7d": 95.5, "price_30d": 94.0}
+        """Yahoo is the last resort for non-Brent/Gold futures: TD, LSE, FMP, then yfinance all tried first."""
+        yahoo_quote = {"symbol": "CL=F", "price": 96.28, "price_7d": 95.5, "price_30d": 94.0}
         with patch.object(helpers, "_lookup_yahoo_futures", return_value=yahoo_quote) as yahoo, \
                 patch.object(helpers, "_lookup_lse", return_value=None) as lse, \
                 patch.object(helpers, "_lookup_fmp", return_value=None) as fmp, \
                 patch.object(helpers, "_lookup_twelvedata", return_value=None) as twelve, \
                 patch.object(helpers, "_lookup_yfinance", return_value=None):
-            quote = helpers.lookup("BZ=F")
+            quote = helpers.lookup("CL=F")
         self.assertEqual(quote["price"], 96.28)
         yahoo.assert_called()
         lse.assert_called()
         fmp.assert_called()
         twelve.assert_called()
+
+    def test_gold_prefers_yahoo_front_month_first(self):
+        """Gold (XAU/USD) leads with Yahoo so the quote matches the current market."""
+        yahoo_quote = {"symbol": "GC=F", "price": 4409.5, "price_7d": 4390.0, "price_30d": 4300.0}
+        with patch.object(helpers, "_lookup_yahoo_futures", return_value=yahoo_quote) as yahoo, \
+                patch.object(helpers, "_lookup_twelvedata", return_value=None) as twelve, \
+                patch.object(helpers, "_lookup_lse", return_value=None) as lse:
+            quote = helpers.lookup("XAU/USD")
+        self.assertEqual(quote["price"], 4409.5)
+        yahoo.assert_called()
+        twelve.assert_not_called()
+        lse.assert_not_called()
+
+    def test_brent_prefers_yahoo_front_month_first(self):
+        yahoo_quote = {"symbol": "BZ=F", "price": 104.2, "price_7d": 103.0, "price_30d": 101.0}
+        with patch.object(helpers, "_lookup_yahoo_futures", return_value=yahoo_quote) as yahoo, \
+                patch.object(helpers, "_lookup_twelvedata", return_value=None) as twelve, \
+                patch.object(helpers, "_lookup_lse", return_value=None) as lse:
+            quote = helpers.lookup("UKOIL")
+        self.assertEqual(quote["price"], 104.2)
+        yahoo.assert_called()
+        twelve.assert_not_called()
+        lse.assert_not_called()
 
     def test_lse_precedes_twelve_data_for_futures(self):
         """LSE should be tried before FMP/yfinance once Twelve Data is down."""

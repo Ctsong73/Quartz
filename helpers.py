@@ -766,17 +766,18 @@ def _display_metadata(symbol):
     return metadata.get(symbol.upper(), (None, None, 1))
 
 
+_YAHOO_PREFERRED = {"BZ=F", "UKOIL", "BCO/USD", "GC=F", "XAU/USD"}
+
+
 def lookup(symbol):
     """Look up a quote using configured providers in order.
 
-    Provider ordering (stocks and futures alike):
+    Provider ordering (default):
     Twelve Data -> London Strategic Edge -> FMP -> yfinance -> Yahoo (final fallback).
+    Brent & Gold (BZ/UKOIL/BCO, GC=F, XAU/USD) lead with Yahoo's CNBC-matching
+    front-month first, because the feeds' continuous/delayed quotes drift several
+    dollars from the quoted future.
     Grains (display multiplier != 1) keep the LSE per-tonne conversion path.
-
-    Note: with Yahoo as the last resort, Brent/WTI normally come from the
-    providers' continuous contracts, which can differ from the CNBC front-month
-    quote; Yahoo only answers when everything else fails (and then with the
-    CNBC-matching front-month for Brent).
 
     After a successful stock lookup, sector, exchange, and description are enriched
     from Yahoo Finance v1 search / quoteSummary (or FMP if a key is configured).
@@ -789,6 +790,9 @@ def lookup(symbol):
         ("yfinance", _lookup_yfinance),
         ("Yahoo Futures", _lookup_yahoo_futures),
     )
+    if symbol.upper() in _YAHOO_PREFERRED:
+        providers = [("Yahoo Futures", _lookup_yahoo_futures)] + \
+            [p for p in providers if p[0] != "Yahoo Futures"]
 
     for name, provider in providers:
         for provider_symbol in _provider_symbols(symbol):
