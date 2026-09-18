@@ -514,18 +514,11 @@ def _brent_next_contract(exp_raw):
 def _lookup_yahoo_futures(symbol):
     """Live front-month price via Yahoo v7 quote (crumb-protected).
     Aliases (UKOIL, BCO/USD, WTI, ...) map to their Yahoo '=F' front-month
-    symbol so Brent/WTI match the CNBC future, ahead of any continuous
-    contract.  Brent (BZ=F) additionally rolls onto the next NYMEX delivery
-    contract when the front is inside its expiry window, matching the
-    contract CNBC displays.  Grains (multiplier != 1) keep the LSE path."""
-    yahoo_map = {
-        "UKOIL": "BZ=F", "BCO/USD": "BZ=F",
-        "WTI": "CL=F", "WTICO/USD": "CL=F",
-        "XAU/USD": "GC=F", "XAG/USD": "SI=F", "XCU/USD": "HG=F",
-        "SOYBN/USD": "ZS=F", "CORN/USD": "ZC=F", "WHEAT/USD": "ZW=F",
-        "NATGAS/USD": "NG=F",
-    }
-    sym = yahoo_map.get(str(symbol).upper(), str(symbol).upper())
+    symbol (see _FUTURES_ALIASES) so Brent/WTI match the CNBC future, ahead of
+    any continuous contract.  Brent (BZ=F) additionally rolls onto the next
+    NYMEX delivery contract when the front is inside its expiry window, matching
+    the contract CNBC displays.  Grains (multiplier != 1) keep the LSE path."""
+    sym = _FUTURES_ALIASES.get(str(symbol).upper(), str(symbol).upper())
     if not sym.endswith("=F"):
         return None
     _, _, multiplier = _display_metadata(sym)
@@ -573,6 +566,43 @@ def _lookup_yahoo_futures(symbol):
             "price_7d": float(prev),
             "price_30d": float(prev),
             "symbol": sym.upper(),
+            "sector": "",
+            "exchange": q.get("fullExchangeName") or q.get("exchange") or "",
+            "description": "",
+        }
+    except Exception as e:
+        logger.warning("Yahoo v7 quote failed for %s: %s", symbol, e)
+        return None
+
+
+def _lookup_yahoo_quote(symbol):
+    """Live quote for any symbol via Yahoo v7 (crumb-protected). Primary for stocks."""
+    symbol = str(symbol).upper()
+    session, crumb = _get_yahoo_crumb()
+    if session is None or not crumb:
+        return None
+    try:
+        resp = session.get(
+            "https://query2.finance.yahoo.com/v7/finance/quote",
+            params={"symbols": symbol, "crumb": crumb},
+            timeout=4,
+        )
+        if resp.status_code != 200:
+            return None
+        quotes = (resp.json().get("quoteResponse") or {}).get("result") or []
+        if not quotes:
+            return None
+        q = quotes[0]
+        price = q.get("regularMarketPrice")
+        if price is None:
+            return None
+        prev = q.get("regularMarketPreviousClose") or price
+        return {
+            "name": q.get("longName") or q.get("shortName") or symbol,
+            "price": float(price),
+            "price_7d": float(prev),
+            "price_30d": float(prev),
+            "symbol": symbol,
             "sector": "",
             "exchange": q.get("fullExchangeName") or q.get("exchange") or "",
             "description": "",
@@ -706,23 +736,44 @@ def _enrich_stock_metadata(result, symbol):
         logger.warning("Metadata enrichment: exchange still empty for %s", symbol)
 
 
-def _provider_symbols(symbol):
-    """Return provider-compatible aliases for common Yahoo futures symbols.
-    Yahoo maps any alias straight to its '=F' front-month symbol, so Brent/WTI
-    resolve to the CNBC front-month contract regardless of alias.  LSE (only
-    used if Yahoo is unavailable) prefers the front-month alias first."""
-    aliases = {
-        "BZ=F": ["UKOIL", "BZ=F", "BCO/USD"],
-        "CL=F": ["WTI", "CL=F", "WTICO/USD"],
-        "GC=F": ["XAU/USD"],
-        "SI=F": ["XAG/USD"],
-        "HG=F": ["XCU/USD"],
-        "ZS=F": ["SOYBN/USD"],
-        "ZC=F": ["CORN/USD"],
-        "ZW=F": ["WHEAT/USD"],
-        "NG=F": ["NATGAS/USD"],
-    }
-    return [symbol.upper(), *aliases.get(symbol.upper(), [])] if symbol.upper() not in ("BZ=F", "CL=F") else [*aliases[symbol.upper()]]
+_FUTURES_ALIASES = {
+    "UKOIL": "BZ=F", "BCO/USD": "BZ=F",
+    "WTI": "CL=F", "WTICO/USD": "CL=F",
+    "XAU/USD": "GC=F", "XAG/USD": "SI=F", "XCU/USD": "HG=F",
+    "SOYBN/USD": "ZS=F", "CORN/USD": "ZC=F", "WHEAT/USD": "ZW=F",
+    "NATGAS/USD": "NG=F",
+}
+
+_FUTURES_GROUP = {
+    "BZ=F": ["UKOIL", "BCO/USD"],
+    "CL=F": ["WTI", "WTICO/USD"],
+    "GC=F": ["XAU/USD"],
+    "SI=F": ["XAG/USD"],
+    "HG=F": ["XCU/USD"],
+    "ZS=F": ["SOYBN/USD"],
+    "ZC=F": ["CORN/USD"],
+    "ZW=F": ["WHEAT/USD"],
+    "NG=F": ["NATGAS/USD"],
+}
+
+
+def _provider_symbols(symbol, provider=""):
+    """Expand a futures symbol into provider-compatible aliases.
+
+    All aliases resolve to the same instrument.  For Yahoo the canonical '=F'
+    front-month symbol is tried first so the roll/front-month smarts apply;
+    other providers keep the user's symbol first, then the related aliases."""
+    s = symbol.upper()
+    if not _is_futures(s):
+        return [s]
+    canonical = _FUTURES_ALIASES.get(s) or (s if s.endswith("=F") else None)
+    if canonical is None:
+        return [s]
+    group = _FUTURES_GROUP.get(canonical, [])
+    others = [a for a in group if a != s]
+    if provider == "Yahoo Futures":
+        return [canonical, *others]
+    return [s, *others]
 
 
 def _fallback_exchange(symbol):
@@ -766,36 +817,33 @@ def _display_metadata(symbol):
     return metadata.get(symbol.upper(), (None, None, 1))
 
 
-_YAHOO_PREFERRED = {"BZ=F", "UKOIL", "BCO/USD", "GC=F", "XAU/USD"}
-
-
 def lookup(symbol):
     """Look up a quote using configured providers in order.
 
-    Provider ordering (default):
-    Twelve Data -> London Strategic Edge -> FMP -> yfinance -> Yahoo (final fallback).
-    Brent & Gold (BZ/UKOIL/BCO, GC=F, XAU/USD) lead with Yahoo's CNBC-matching
-    front-month first, because the feeds' continuous/delayed quotes drift several
-    dollars from the quoted future.
+    Provider ordering:
+    Yahoo first (the most reliable, CNBC-matching source):
+      - futures via its =F front-month / roll logic,
+      - stocks via the crumb-protected v7 quote endpoint.
+    Fallbacks (in order): Twelve Data -> London Strategic Edge -> yfinance -> FMP.
+    FMP is last: its free tier only returns end-of-day data, which is stale for
+    live portfolio quotes.  If Yahoo is blocked/unavailable the request silently
+    falls through to the feeds, so being first resort never produces a blank result.
     Grains (display multiplier != 1) keep the LSE per-tonne conversion path.
 
     After a successful stock lookup, sector, exchange, and description are enriched
     from Yahoo Finance v1 search / quoteSummary (or FMP if a key is configured).
     """
     is_fut = _is_futures(symbol)
-    providers = (
+    providers = [
+        ("Yahoo Futures", _lookup_yahoo_futures) if is_fut else ("Yahoo", _lookup_yahoo_quote),
         ("Twelve Data", _lookup_twelvedata),
         ("London Strategic Edge", _lookup_lse),
-        ("FMP", _lookup_fmp),
         ("yfinance", _lookup_yfinance),
-        ("Yahoo Futures", _lookup_yahoo_futures),
-    )
-    if symbol.upper() in _YAHOO_PREFERRED:
-        providers = [("Yahoo Futures", _lookup_yahoo_futures)] + \
-            [p for p in providers if p[0] != "Yahoo Futures"]
+        ("FMP", _lookup_fmp),
+    ]
 
     for name, provider in providers:
-        for provider_symbol in _provider_symbols(symbol):
+        for provider_symbol in _provider_symbols(symbol, name):
             try:
                 result = provider(provider_symbol)
                 if result:

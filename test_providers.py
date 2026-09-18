@@ -6,9 +6,11 @@ import helpers
 
 
 class ProviderTests(unittest.TestCase):
-    def test_lookup_prefers_twelve_data(self):
+    def test_lookup_falls_back_to_twelve_data_for_stocks(self):
+        """Yahoo is first for stocks; Twelve Data is the next fallback when Yahoo is down."""
         twelve_quote = {"symbol": "AAPL", "price": 200}
-        with patch.object(helpers, "_lookup_twelvedata", return_value=twelve_quote) as twelve, \
+        with patch.object(helpers, "_lookup_yahoo_quote", return_value=None), \
+                patch.object(helpers, "_lookup_twelvedata", return_value=twelve_quote) as twelve, \
                 patch.object(helpers, "_lookup_fmp") as fmp:
             self.assertEqual(helpers.lookup("aapl"), twelve_quote)
             twelve.assert_called_once_with("AAPL")
@@ -16,7 +18,8 @@ class ProviderTests(unittest.TestCase):
 
     def test_lookup_prefers_twelve_data_for_live_prices(self):
         twelve_quote = {"symbol": "AAPL", "price": 200}
-        with patch.object(helpers, "_lookup_twelvedata", return_value=twelve_quote) as twelve, \
+        with patch.object(helpers, "_lookup_yahoo_quote", return_value=None), \
+                patch.object(helpers, "_lookup_twelvedata", return_value=twelve_quote) as twelve, \
                 patch.object(helpers, "_lookup_lse") as lse:
             self.assertEqual(helpers.lookup("AAPL"), twelve_quote)
             twelve.assert_called_once_with("AAPL")
@@ -32,10 +35,11 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(helpers._fallback_exchange("BZ=F"), "ICE")
 
     def test_twelve_data_precedes_lse_for_stocks(self):
-        """Twelve Data should still be tried first for equities (non-futures)."""
+        """Within the stock fallback chain, Twelve Data is tried before LSE once Yahoo is down."""
         twelve_quote = {"symbol": "AAPL", "price": 200, "sector": "Technology",
                         "exchange": "NASDAQ", "description": "Apple Inc."}
-        with patch.object(helpers, "_lookup_lse") as lse, \
+        with patch.object(helpers, "_lookup_yahoo_quote", return_value=None), \
+                patch.object(helpers, "_lookup_lse") as lse, \
                 patch.object(helpers, "_lookup_twelvedata", return_value=twelve_quote), \
                 patch.object(helpers, "_enrich_stock_metadata"):
             quote = helpers.lookup("AAPL")
@@ -50,8 +54,8 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(quote["price"], 1296.4)
         self.assertEqual(quote["name"], "Soybean Futures")
         self.assertEqual(quote["exchange"], "CBOT")
-    def test_yahoo_is_final_fallback_for_futures(self):
-        """Yahoo is the last resort for non-Brent/Gold futures: TD, LSE, FMP, then yfinance all tried first."""
+    def test_yahoo_precedes_all_for_futures(self):
+        """Yahoo is the first resort for every futures symbol — no other provider is reached."""
         yahoo_quote = {"symbol": "CL=F", "price": 96.28, "price_7d": 95.5, "price_30d": 94.0}
         with patch.object(helpers, "_lookup_yahoo_futures", return_value=yahoo_quote) as yahoo, \
                 patch.object(helpers, "_lookup_lse", return_value=None) as lse, \
@@ -61,9 +65,9 @@ class ProviderTests(unittest.TestCase):
             quote = helpers.lookup("CL=F")
         self.assertEqual(quote["price"], 96.28)
         yahoo.assert_called()
-        lse.assert_called()
-        fmp.assert_called()
-        twelve.assert_called()
+        lse.assert_not_called()
+        fmp.assert_not_called()
+        twelve.assert_not_called()
 
     def test_gold_prefers_yahoo_front_month_first(self):
         """Gold (XAU/USD) leads with Yahoo so the quote matches the current market."""
@@ -106,6 +110,18 @@ class ProviderTests(unittest.TestCase):
         ukoil_index = aliases.index("UKOIL")
         self.assertLess(ukoil_index, bco_index)
 
+    def test_provider_symbols_puts_canonical_first_for_yahoo(self):
+        """Yahoo gets the canonical '=F' front-month first so its roll logic applies."""
+        aliases = helpers._provider_symbols("UKOIL", "Yahoo Futures")
+        self.assertEqual(aliases[0], "BZ=F")
+        self.assertIn("BCO/USD", aliases)
+
+    def test_provider_symbols_preserves_user_symbol_for_other_providers(self):
+        """Non-Yahoo providers try the user's symbol first, then related aliases."""
+        aliases = helpers._provider_symbols("UKOIL")
+        self.assertEqual(aliases[0], "UKOIL")
+        self.assertIn("BCO/USD", aliases)
+
     def test_is_futures_detects_yahoo_style_symbols(self):
         self.assertTrue(helpers._is_futures("BZ=F"))
         self.assertTrue(helpers._is_futures("GC=F"))
@@ -140,7 +156,8 @@ class ProviderTests(unittest.TestCase):
     def test_lookup_falls_back_to_london_strategic_edge(self):
         lse_quote = {"symbol": "AAPL", "price": 200, "sector": "",
                      "exchange": "London Strategic Edge", "description": "No description available."}
-        with patch.object(helpers, "_lookup_twelvedata", return_value=None), \
+        with patch.object(helpers, "_lookup_yahoo_quote", return_value=None), \
+                patch.object(helpers, "_lookup_twelvedata", return_value=None), \
                 patch.object(helpers, "_lookup_lse", return_value=lse_quote), \
                 patch.object(helpers, "_enrich_stock_metadata"):
             self.assertEqual(helpers.lookup("AAPL"), lse_quote)

@@ -6,9 +6,11 @@ import helpers
 
 
 class ProviderTests(unittest.TestCase):
-    def test_lookup_prefers_twelve_data(self):
+    def test_lookup_falls_back_to_twelve_data_for_stocks(self):
+        """Yahoo is first for stocks; Twelve Data is the next fallback when Yahoo is down."""
         twelve_quote = {"symbol": "AAPL", "price": 200}
-        with patch.object(helpers, "_lookup_twelvedata", return_value=twelve_quote) as twelve, \
+        with patch.object(helpers, "_lookup_yahoo_quote", return_value=None), \
+                patch.object(helpers, "_lookup_twelvedata", return_value=twelve_quote) as twelve, \
                 patch.object(helpers, "_lookup_fmp") as fmp:
             self.assertEqual(helpers.lookup("aapl"), twelve_quote)
             twelve.assert_called_once_with("AAPL")
@@ -16,7 +18,8 @@ class ProviderTests(unittest.TestCase):
 
     def test_lookup_prefers_twelve_data_for_live_prices(self):
         twelve_quote = {"symbol": "AAPL", "price": 200}
-        with patch.object(helpers, "_lookup_twelvedata", return_value=twelve_quote) as twelve, \
+        with patch.object(helpers, "_lookup_yahoo_quote", return_value=None), \
+                patch.object(helpers, "_lookup_twelvedata", return_value=twelve_quote) as twelve, \
                 patch.object(helpers, "_lookup_lse") as lse:
             self.assertEqual(helpers.lookup("AAPL"), twelve_quote)
             twelve.assert_called_once_with("AAPL")
@@ -32,10 +35,11 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(helpers._fallback_exchange("BZ=F"), "ICE")
 
     def test_twelve_data_precedes_lse_for_stocks(self):
-        """Twelve Data should still be tried first for equities (non-futures)."""
+        """Within the stock fallback chain, Twelve Data is tried before LSE once Yahoo is down."""
         twelve_quote = {"symbol": "AAPL", "price": 200, "sector": "Technology",
                         "exchange": "NASDAQ", "description": "Apple Inc."}
-        with patch.object(helpers, "_lookup_lse") as lse, \
+        with patch.object(helpers, "_lookup_yahoo_quote", return_value=None), \
+                patch.object(helpers, "_lookup_lse") as lse, \
                 patch.object(helpers, "_lookup_twelvedata", return_value=twelve_quote), \
                 patch.object(helpers, "_enrich_stock_metadata"):
             quote = helpers.lookup("AAPL")
@@ -50,28 +54,54 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(quote["price"], 1296.4)
         self.assertEqual(quote["name"], "Soybean Futures")
         self.assertEqual(quote["exchange"], "CBOT")
-    def test_yahoo_precedes_lse_for_futures(self):
-        """Yahoo v7 gives the front-month contract that matches CNBC."""
-        yahoo_quote = {"symbol": "BZ=F", "price": 96.28, "price_7d": 95.5, "price_30d": 94.0}
+    def test_yahoo_precedes_all_for_futures(self):
+        """Yahoo is the first resort for every futures symbol — no other provider is reached."""
+        yahoo_quote = {"symbol": "CL=F", "price": 96.28, "price_7d": 95.5, "price_30d": 94.0}
         with patch.object(helpers, "_lookup_yahoo_futures", return_value=yahoo_quote) as yahoo, \
-                patch.object(helpers, "_lookup_lse") as lse, \
-                patch.object(helpers, "_lookup_twelvedata") as twelve:
-            quote = helpers.lookup("BZ=F")
+                patch.object(helpers, "_lookup_lse", return_value=None) as lse, \
+                patch.object(helpers, "_lookup_fmp", return_value=None) as fmp, \
+                patch.object(helpers, "_lookup_twelvedata", return_value=None) as twelve, \
+                patch.object(helpers, "_lookup_yfinance", return_value=None):
+            quote = helpers.lookup("CL=F")
         self.assertEqual(quote["price"], 96.28)
         yahoo.assert_called()
         lse.assert_not_called()
+        fmp.assert_not_called()
         twelve.assert_not_called()
 
+    def test_gold_prefers_yahoo_front_month_first(self):
+        """Gold (XAU/USD) leads with Yahoo so the quote matches the current market."""
+        yahoo_quote = {"symbol": "GC=F", "price": 4409.5, "price_7d": 4390.0, "price_30d": 4300.0}
+        with patch.object(helpers, "_lookup_yahoo_futures", return_value=yahoo_quote) as yahoo, \
+                patch.object(helpers, "_lookup_twelvedata", return_value=None) as twelve, \
+                patch.object(helpers, "_lookup_lse", return_value=None) as lse:
+            quote = helpers.lookup("XAU/USD")
+        self.assertEqual(quote["price"], 4409.5)
+        yahoo.assert_called()
+        twelve.assert_not_called()
+        lse.assert_not_called()
+
+    def test_brent_prefers_yahoo_front_month_first(self):
+        yahoo_quote = {"symbol": "BZ=F", "price": 104.2, "price_7d": 103.0, "price_30d": 101.0}
+        with patch.object(helpers, "_lookup_yahoo_futures", return_value=yahoo_quote) as yahoo, \
+                patch.object(helpers, "_lookup_twelvedata", return_value=None) as twelve, \
+                patch.object(helpers, "_lookup_lse", return_value=None) as lse:
+            quote = helpers.lookup("UKOIL")
+        self.assertEqual(quote["price"], 104.2)
+        yahoo.assert_called()
+        twelve.assert_not_called()
+        lse.assert_not_called()
+
     def test_lse_precedes_twelve_data_for_futures(self):
-        """LSE should be tried before Twelve Data for known futures symbols once Yahoo is down."""
+        """LSE should be tried before FMP/yfinance once Twelve Data is down."""
         lse_quote = {"symbol": "BZ=F", "price": 97.10, "price_7d": 96.5, "price_30d": 95.0}
         with patch.object(helpers, "_lookup_yahoo_futures", return_value=None), \
                 patch.object(helpers, "_lookup_lse", return_value=lse_quote) as lse, \
-                patch.object(helpers, "_lookup_twelvedata") as twelve:
+                patch.object(helpers, "_lookup_twelvedata", return_value=None) as twelve:
             quote = helpers.lookup("BZ=F")
         self.assertEqual(quote["price"], 97.10)
         lse.assert_called()
-        twelve.assert_not_called()
+        twelve.assert_called()
 
     def test_ukoil_alias_precedes_bco_for_brent(self):
         """UKOIL should be tried before BCO/USD for front-month accuracy."""
@@ -79,6 +109,18 @@ class ProviderTests(unittest.TestCase):
         bco_index = aliases.index("BCO/USD")
         ukoil_index = aliases.index("UKOIL")
         self.assertLess(ukoil_index, bco_index)
+
+    def test_provider_symbols_puts_canonical_first_for_yahoo(self):
+        """Yahoo gets the canonical '=F' front-month first so its roll logic applies."""
+        aliases = helpers._provider_symbols("UKOIL", "Yahoo Futures")
+        self.assertEqual(aliases[0], "BZ=F")
+        self.assertIn("BCO/USD", aliases)
+
+    def test_provider_symbols_preserves_user_symbol_for_other_providers(self):
+        """Non-Yahoo providers try the user's symbol first, then related aliases."""
+        aliases = helpers._provider_symbols("UKOIL")
+        self.assertEqual(aliases[0], "UKOIL")
+        self.assertIn("BCO/USD", aliases)
 
     def test_is_futures_detects_yahoo_style_symbols(self):
         self.assertTrue(helpers._is_futures("BZ=F"))
@@ -114,7 +156,8 @@ class ProviderTests(unittest.TestCase):
     def test_lookup_falls_back_to_london_strategic_edge(self):
         lse_quote = {"symbol": "AAPL", "price": 200, "sector": "",
                      "exchange": "London Strategic Edge", "description": "No description available."}
-        with patch.object(helpers, "_lookup_twelvedata", return_value=None), \
+        with patch.object(helpers, "_lookup_yahoo_quote", return_value=None), \
+                patch.object(helpers, "_lookup_twelvedata", return_value=None), \
                 patch.object(helpers, "_lookup_lse", return_value=lse_quote), \
                 patch.object(helpers, "_enrich_stock_metadata"):
             self.assertEqual(helpers.lookup("AAPL"), lse_quote)
@@ -169,6 +212,78 @@ class ProviderTests(unittest.TestCase):
             quote = helpers._lookup_lse("BRENT")
         self.assertEqual(quote["price"], 125)
         self.assertEqual(candles.call_args_list[0].kwargs, {"limit": 1, "timeframe": "1m", "order": "desc"})
+
+
+    def test_brent_next_contract_symbol(self):
+        self.assertEqual(helpers._brent_next_contract("2026-10-01T00:00:00Z"), "BZX26.NYM")
+        self.assertEqual(helpers._brent_next_contract("2026-11-02T00:00:00Z"), "BZZ26.NYM")
+        self.assertEqual(helpers._brent_next_contract("2026-12-01T00:00:00Z"), "BZF27.NYM")
+        self.assertIsNone(helpers._brent_next_contract("garbage"))
+        self.assertIsNone(helpers._days_until_expiry("garbage"))
+
+    def test_brent_rolls_to_next_contract_inside_expiry_window(self):
+        from datetime import datetime, timezone, timedelta
+
+        class FakeResp:
+            status_code = 200
+            def __init__(self, payload):
+                self._payload = payload
+            def json(self):
+                return self._payload
+
+        seen = []
+        front_exp = (datetime.now(timezone.utc) + timedelta(days=10)).strftime("%Y-%m-%dT00:00:00Z")
+        def fake_get(url, params=None, timeout=4):
+            sym = params.get("symbols")
+            seen.append(sym)
+            is_next = "26.NYM" in sym
+            return FakeResp({"quoteResponse": {"result": [{
+                "symbol": sym,
+                "regularMarketPrice": 103.72 if is_next else 98.90,
+                "regularMarketPreviousClose": 103.20 if is_next else 98.50,
+                "expireIsoDate": front_exp if not is_next else "2026-11-02T00:00:00Z",
+            }]}})
+
+        class FakeSession:
+            def get(self, url, params=None, timeout=4):
+                return fake_get(url, params, timeout)
+
+        with patch.object(helpers, "_get_yahoo_crumb", return_value=(FakeSession(), "crumb")):
+            q = helpers._lookup_yahoo_futures("UKOIL")
+        self.assertIsNotNone(q)
+        self.assertEqual(q["price"], 103.72)
+        self.assertEqual(len(seen), 2)
+        self.assertNotEqual(seen[0], seen[1])
+
+    def test_brent_keeps_front_outside_expiry_window(self):
+        from datetime import datetime, timezone, timedelta
+
+        class FakeResp:
+            status_code = 200
+            def __init__(self, payload):
+                self._payload = payload
+            def json(self):
+                return self._payload
+
+        seen = []
+        front_exp = (datetime.now(timezone.utc) + timedelta(days=90)).strftime("%Y-%m-%dT00:00:00Z")
+        def fake_get(url, params=None, timeout=4):
+            seen.append(params.get("symbols"))
+            return FakeResp({"quoteResponse": {"result": [{
+                "symbol": "BZ=F",
+                "regularMarketPrice": 98.90,
+                "regularMarketPreviousClose": 98.50,
+                "expireIsoDate": front_exp,
+            }]}})
+
+        class FakeSession:
+            def get(self, url, params=None, timeout=4):
+                return fake_get(url, params, timeout)
+
+        with patch.object(helpers, "_get_yahoo_crumb", return_value=(FakeSession(), "crumb")):
+            q = helpers._lookup_yahoo_futures("BZ=F")
+        self.assertEqual(q["price"], 98.90)
+        self.assertEqual(seen, ["BZ=F"])
 
 
 if __name__ == "__main__":
