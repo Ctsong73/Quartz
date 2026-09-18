@@ -171,5 +171,77 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(candles.call_args_list[0].kwargs, {"limit": 1, "timeframe": "1m", "order": "desc"})
 
 
+    def test_brent_next_contract_symbol(self):
+        self.assertEqual(helpers._brent_next_contract("2026-10-01T00:00:00Z"), "BZX26.NYM")
+        self.assertEqual(helpers._brent_next_contract("2026-11-02T00:00:00Z"), "BZZ26.NYM")
+        self.assertEqual(helpers._brent_next_contract("2026-12-01T00:00:00Z"), "BZF27.NYM")
+        self.assertIsNone(helpers._brent_next_contract("garbage"))
+        self.assertIsNone(helpers._days_until_expiry("garbage"))
+
+    def test_brent_rolls_to_next_contract_inside_expiry_window(self):
+        from datetime import datetime, timezone, timedelta
+
+        class FakeResp:
+            status_code = 200
+            def __init__(self, payload):
+                self._payload = payload
+            def json(self):
+                return self._payload
+
+        seen = []
+        front_exp = (datetime.now(timezone.utc) + timedelta(days=10)).strftime("%Y-%m-%dT00:00:00Z")
+        def fake_get(url, params=None, timeout=4):
+            sym = params.get("symbols")
+            seen.append(sym)
+            is_next = "26.NYM" in sym
+            return FakeResp({"quoteResponse": {"result": [{
+                "symbol": sym,
+                "regularMarketPrice": 103.72 if is_next else 98.90,
+                "regularMarketPreviousClose": 103.20 if is_next else 98.50,
+                "expireIsoDate": front_exp if not is_next else "2026-11-02T00:00:00Z",
+            }]}})
+
+        class FakeSession:
+            def get(self, url, params=None, timeout=4):
+                return fake_get(url, params, timeout)
+
+        with patch.object(helpers, "_get_yahoo_crumb", return_value=(FakeSession(), "crumb")):
+            q = helpers._lookup_yahoo_futures("UKOIL")
+        self.assertIsNotNone(q)
+        self.assertEqual(q["price"], 103.72)
+        self.assertEqual(len(seen), 2)
+        self.assertNotEqual(seen[0], seen[1])
+
+    def test_brent_keeps_front_outside_expiry_window(self):
+        from datetime import datetime, timezone, timedelta
+
+        class FakeResp:
+            status_code = 200
+            def __init__(self, payload):
+                self._payload = payload
+            def json(self):
+                return self._payload
+
+        seen = []
+        front_exp = (datetime.now(timezone.utc) + timedelta(days=90)).strftime("%Y-%m-%dT00:00:00Z")
+        def fake_get(url, params=None, timeout=4):
+            seen.append(params.get("symbols"))
+            return FakeResp({"quoteResponse": {"result": [{
+                "symbol": "BZ=F",
+                "regularMarketPrice": 98.90,
+                "regularMarketPreviousClose": 98.50,
+                "expireIsoDate": front_exp,
+            }]}})
+
+        class FakeSession:
+            def get(self, url, params=None, timeout=4):
+                return fake_get(url, params, timeout)
+
+        with patch.object(helpers, "_get_yahoo_crumb", return_value=(FakeSession(), "crumb")):
+            q = helpers._lookup_yahoo_futures("BZ=F")
+        self.assertEqual(q["price"], 98.90)
+        self.assertEqual(seen, ["BZ=F"])
+
+
 if __name__ == "__main__":
     unittest.main()

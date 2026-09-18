@@ -4,6 +4,7 @@ import os
 import random
 import logging
 import time
+from datetime import datetime, timezone
 
 from flask import redirect, render_template, session
 from functools import wraps
@@ -477,11 +478,46 @@ def _yahoo_metadata(symbol):
     return meta
 
 
+_YAHOO_MONTH_CODES = "FGHJKMNQUVXZ"
+
+
+def _days_until_expiry(exp_raw):
+    """Whole days from now until a Yahoo expireIsoDate / expireDate epoch, else None."""
+    try:
+        if isinstance(exp_raw, (int, float)):
+            exp = datetime.fromtimestamp(exp_raw, tz=timezone.utc)
+        else:
+            exp = datetime.fromisoformat(str(exp_raw).replace("Z", "+00:00"))
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+        return (exp - datetime.now(timezone.utc)).days
+    except Exception:
+        return None
+
+
+def _brent_next_contract(exp_raw):
+    """Yahoo symbol for the Brent NYMEX delivery month after the given expiry.
+    e.g. BZ=F expiring 2026-10-01 -> 'BZX26.NYM' (the Nov'26 CNBC quote)."""
+    try:
+        if isinstance(exp_raw, (int, float)):
+            exp = datetime.fromtimestamp(exp_raw, tz=timezone.utc)
+        else:
+            exp = datetime.fromisoformat(str(exp_raw).replace("Z", "+00:00"))
+        month, year = exp.month + 1, exp.year
+        if month == 13:
+            month, year = 1, year + 1
+        return f"BZ{_YAHOO_MONTH_CODES[month - 1]}{year % 100:02d}.NYM"
+    except Exception:
+        return None
+
+
 def _lookup_yahoo_futures(symbol):
     """Live front-month price via Yahoo v7 quote (crumb-protected).
     Aliases (UKOIL, BCO/USD, WTI, ...) map to their Yahoo '=F' front-month
     symbol so Brent/WTI match the CNBC future, ahead of any continuous
-    contract.  Grains (multiplier != 1) keep the LSE per-tonne path."""
+    contract.  Brent (BZ=F) additionally rolls onto the next NYMEX delivery
+    contract when the front is inside its expiry window, matching the
+    contract CNBC displays.  Grains (multiplier != 1) keep the LSE path."""
     yahoo_map = {
         "UKOIL": "BZ=F", "BCO/USD": "BZ=F",
         "WTI": "CL=F", "WTICO/USD": "CL=F",
@@ -510,6 +546,23 @@ def _lookup_yahoo_futures(symbol):
         if not quotes:
             return None
         q = quotes[0]
+        if sym == "BZ=F":
+            exp_raw = q.get("expireIsoDate") or q.get("expireDate")
+            days = _days_until_expiry(exp_raw)
+            if days is not None and 0 < days <= 21:
+                next_sym = _brent_next_contract(exp_raw)
+                if next_sym:
+                    try:
+                        nxt = session.get(
+                            "https://query2.finance.yahoo.com/v7/finance/quote",
+                            params={"symbols": next_sym, "crumb": crumb},
+                            timeout=4,
+                        )
+                        nq = ((nxt.json().get("quoteResponse") or {}).get("result") or [None])[0]
+                        if nq and nq.get("regularMarketPrice") is not None:
+                            q = nq
+                    except Exception as e:
+                        logger.warning("Yahoo v7 next Brent contract failed %s: %s", next_sym, e)
         price = q.get("regularMarketPrice")
         if price is None:
             return None
