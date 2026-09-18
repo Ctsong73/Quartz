@@ -479,12 +479,20 @@ def _yahoo_metadata(symbol):
 
 def _lookup_yahoo_futures(symbol):
     """Live front-month price via Yahoo v7 quote (crumb-protected).
-    Only answers Yahoo-style '=F' symbols so alias iterations (e.g. UKOIL) are
-    skipped; this is the source that matches CNBC for Brent/WTI front month
-    (continuous contracts like BCO/USD trade ~$1-3 higher)."""
-    if not str(symbol).upper().endswith("=F"):
+    Aliases (UKOIL, BCO/USD, WTI, ...) map to their Yahoo '=F' front-month
+    symbol so Brent/WTI match the CNBC future, ahead of any continuous
+    contract.  Grains (multiplier != 1) keep the LSE per-tonne path."""
+    yahoo_map = {
+        "UKOIL": "BZ=F", "BCO/USD": "BZ=F",
+        "WTI": "CL=F", "WTICO/USD": "CL=F",
+        "XAU/USD": "GC=F", "XAG/USD": "SI=F", "XCU/USD": "HG=F",
+        "SOYBN/USD": "ZS=F", "CORN/USD": "ZC=F", "WHEAT/USD": "ZW=F",
+        "NATGAS/USD": "NG=F",
+    }
+    sym = yahoo_map.get(str(symbol).upper(), str(symbol).upper())
+    if not sym.endswith("=F"):
         return None
-    _, _, multiplier = _display_metadata(symbol.upper())
+    _, _, multiplier = _display_metadata(sym)
     if multiplier != 1:
         return None  # grains: keep the LSE per-tonne conversion path unchanged
     session, crumb = _get_yahoo_crumb()
@@ -493,7 +501,7 @@ def _lookup_yahoo_futures(symbol):
     try:
         resp = session.get(
             "https://query2.finance.yahoo.com/v7/finance/quote",
-            params={"symbols": symbol.upper(), "crumb": crumb},
+            params={"symbols": sym, "crumb": crumb},
             timeout=4,
         )
         if resp.status_code != 200:
@@ -507,11 +515,11 @@ def _lookup_yahoo_futures(symbol):
             return None
         prev = q.get("regularMarketPreviousClose") or price
         return {
-            "name": symbol.upper(),
+            "name": sym.upper(),
             "price": float(price),
             "price_7d": float(prev),
             "price_30d": float(prev),
-            "symbol": symbol.upper(),
+            "symbol": sym.upper(),
             "sector": "",
             "exchange": q.get("fullExchangeName") or q.get("exchange") or "",
             "description": "",
@@ -647,10 +655,9 @@ def _enrich_stock_metadata(result, symbol):
 
 def _provider_symbols(symbol):
     """Return provider-compatible aliases for common Yahoo futures symbols.
-    UKOIL precedes BZ=F for Brent because it maps to the ICE front-month
-    contract (matching CNBC/Bloomberg quotes), whereas some feeds expose the
-    generic/continuous next-nearby contract which trades ~$1-2 higher. Each
-    provider tries these in order, so the front-month alias must come first."""
+    Yahoo maps any alias straight to its '=F' front-month symbol, so Brent/WTI
+    resolve to the CNBC front-month contract regardless of alias.  LSE (only
+    used if Yahoo is unavailable) prefers the front-month alias first."""
     aliases = {
         "BZ=F": ["UKOIL", "BZ=F", "BCO/USD"],
         "CL=F": ["WTI", "CL=F", "WTICO/USD"],
@@ -667,15 +674,15 @@ def _provider_symbols(symbol):
 
 def _fallback_exchange(symbol):
     exchanges = {
-        "BZ=F": "ICE",
-        "CL=F": "NYMEX",
-        "GC=F": "COMEX",
-        "SI=F": "COMEX",
-        "HG=F": "COMEX",
-        "ZS=F": "CBOT",
-        "ZC=F": "CBOT",
-        "ZW=F": "CBOT",
-        "NG=F": "NYMEX",
+        "BZ=F": "ICE", "UKOIL": "ICE", "BCO/USD": "ICE",
+        "CL=F": "NYMEX", "WTI": "NYMEX", "WTICO/USD": "NYMEX",
+        "GC=F": "COMEX", "XAU/USD": "COMEX",
+        "SI=F": "COMEX", "XAG/USD": "COMEX",
+        "HG=F": "COMEX", "XCU/USD": "COMEX",
+        "ZS=F": "CBOT", "SOYBN/USD": "CBOT",
+        "ZC=F": "CBOT", "CORN/USD": "CBOT",
+        "ZW=F": "CBOT", "WHEAT/USD": "CBOT",
+        "NG=F": "NYMEX", "NATGAS/USD": "NYMEX",
     }
     return exchanges.get(symbol.upper(), "Unknown")
 
@@ -683,14 +690,25 @@ def _fallback_exchange(symbol):
 def _display_metadata(symbol):
     metadata = {
         "BZ=F": ("Brent Crude Oil", "ICE", 1),
+        "UKOIL": ("Brent Crude Oil", "ICE", 1),
+        "BCO/USD": ("Brent Crude Oil", "ICE", 1),
         "CL=F": ("WTI Crude Oil", "NYMEX", 1),
+        "WTI": ("WTI Crude Oil", "NYMEX", 1),
+        "WTICO/USD": ("WTI Crude Oil", "NYMEX", 1),
         "GC=F": ("Gold Futures", "COMEX", 1),
+        "XAU/USD": ("Gold Futures", "COMEX", 1),
         "SI=F": ("Silver Futures", "COMEX", 1),
+        "XAG/USD": ("Silver Futures", "COMEX", 1),
         "HG=F": ("Copper Futures", "COMEX", 1),
+        "XCU/USD": ("Copper Futures", "COMEX", 1),
         "ZS=F": ("Soybean Futures", "CBOT", 100),
+        "SOYBN/USD": ("Soybean Futures", "CBOT", 100),
         "ZC=F": ("Corn Futures", "CBOT", 100),
+        "CORN/USD": ("Corn Futures", "CBOT", 100),
         "ZW=F": ("Wheat Futures", "CBOT", 100),
+        "WHEAT/USD": ("Wheat Futures", "CBOT", 100),
         "NG=F": ("Natural Gas Futures", "NYMEX", 1),
+        "NATGAS/USD": ("Natural Gas Futures", "NYMEX", 1),
     }
     return metadata.get(symbol.upper(), (None, None, 1))
 
