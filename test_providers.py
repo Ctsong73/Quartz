@@ -50,28 +50,31 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(quote["price"], 1296.4)
         self.assertEqual(quote["name"], "Soybean Futures")
         self.assertEqual(quote["exchange"], "CBOT")
-    def test_yahoo_precedes_lse_for_futures(self):
-        """Yahoo v7 gives the front-month contract that matches CNBC."""
+    def test_yahoo_is_final_fallback_for_futures(self):
+        """Yahoo is the last resort: TD, LSE, FMP, then yfinance all tried first."""
         yahoo_quote = {"symbol": "BZ=F", "price": 96.28, "price_7d": 95.5, "price_30d": 94.0}
         with patch.object(helpers, "_lookup_yahoo_futures", return_value=yahoo_quote) as yahoo, \
-                patch.object(helpers, "_lookup_lse") as lse, \
-                patch.object(helpers, "_lookup_twelvedata") as twelve:
+                patch.object(helpers, "_lookup_lse", return_value=None) as lse, \
+                patch.object(helpers, "_lookup_fmp", return_value=None) as fmp, \
+                patch.object(helpers, "_lookup_twelvedata", return_value=None) as twelve, \
+                patch.object(helpers, "_lookup_yfinance", return_value=None):
             quote = helpers.lookup("BZ=F")
         self.assertEqual(quote["price"], 96.28)
         yahoo.assert_called()
-        lse.assert_not_called()
-        twelve.assert_not_called()
+        lse.assert_called()
+        fmp.assert_called()
+        twelve.assert_called()
 
     def test_lse_precedes_twelve_data_for_futures(self):
-        """LSE should be tried before Twelve Data for known futures symbols once Yahoo is down."""
+        """LSE should be tried before FMP/yfinance once Twelve Data is down."""
         lse_quote = {"symbol": "BZ=F", "price": 97.10, "price_7d": 96.5, "price_30d": 95.0}
         with patch.object(helpers, "_lookup_yahoo_futures", return_value=None), \
                 patch.object(helpers, "_lookup_lse", return_value=lse_quote) as lse, \
-                patch.object(helpers, "_lookup_twelvedata") as twelve:
+                patch.object(helpers, "_lookup_twelvedata", return_value=None) as twelve:
             quote = helpers.lookup("BZ=F")
         self.assertEqual(quote["price"], 97.10)
         lse.assert_called()
-        twelve.assert_not_called()
+        twelve.assert_called()
 
     def test_ukoil_alias_precedes_bco_for_brent(self):
         """UKOIL should be tried before BCO/USD for front-month accuracy."""

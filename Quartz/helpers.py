@@ -767,40 +767,28 @@ def _display_metadata(symbol):
 
 
 def lookup(symbol):
-    """Look up a quote using configured providers in reliability order.
-    
-    Provider ordering:
-    - Futures/commodities: Yahoo v7 quote first (front-month contracts that match
-      CNBC/Bloomberg), then London Strategic Edge, Twelve Data, FMP, yfinance.
-      Grains (display multiplier != 1) keep the LSE per-tonne conversion path.
-    - Stocks: Twelve Data first (better equities coverage), then LSE, FMP, yfinance.
+    """Look up a quote using configured providers in order.
+
+    Provider ordering (stocks and futures alike):
+    Twelve Data -> London Strategic Edge -> FMP -> yfinance -> Yahoo (final fallback).
+    Grains (display multiplier != 1) keep the LSE per-tonne conversion path.
+
+    Note: with Yahoo as the last resort, Brent/WTI normally come from the
+    providers' continuous contracts, which can differ from the CNBC front-month
+    quote; Yahoo only answers when everything else fails (and then with the
+    CNBC-matching front-month for Brent).
 
     After a successful stock lookup, sector, exchange, and description are enriched
     from Yahoo Finance v1 search / quoteSummary (or FMP if a key is configured).
     """
     is_fut = _is_futures(symbol)
-    if is_fut:
-        providers = (
-            ("Yahoo Futures", _lookup_yahoo_futures),
-            ("Twelve Data", _lookup_twelvedata),
-            ("yfinance", _lookup_yfinance),
-        ) if os.environ.get("RENDER") else (
-            ("Yahoo Futures", _lookup_yahoo_futures),
-            ("London Strategic Edge", _lookup_lse),
-            ("Twelve Data", _lookup_twelvedata),
-            ("FMP", _lookup_fmp),
-            ("yfinance", _lookup_yfinance),
-        )
-    else:
-        providers = (
-            ("Twelve Data", _lookup_twelvedata),
-            ("yfinance", _lookup_yfinance),
-        ) if os.environ.get("RENDER") else (
-            ("Twelve Data", _lookup_twelvedata),
-            ("London Strategic Edge", _lookup_lse),
-            ("FMP", _lookup_fmp),
-            ("yfinance", _lookup_yfinance),
-        )
+    providers = (
+        ("Twelve Data", _lookup_twelvedata),
+        ("London Strategic Edge", _lookup_lse),
+        ("FMP", _lookup_fmp),
+        ("yfinance", _lookup_yfinance),
+        ("Yahoo Futures", _lookup_yahoo_futures),
+    )
 
     for name, provider in providers:
         for provider_symbol in _provider_symbols(symbol):
