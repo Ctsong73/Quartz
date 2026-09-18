@@ -824,11 +824,12 @@ def lookup(symbol):
     Yahoo first (the most reliable, CNBC-matching source):
       - futures via its =F front-month / roll logic,
       - stocks via the crumb-protected v7 quote endpoint.
-    Fallbacks (in order): Twelve Data -> London Strategic Edge -> yfinance -> FMP.
+    yfinance sits right after Yahoo — same Yahoo data but via the Ticker
+    library; on Render/Cloudflare datacenter IPs where v7+crumb is blocked,
+    yfinance still returns live prices (as the homepage ticker already proves).
+    Remaining fallbacks: Twelve Data -> London Strategic Edge -> FMP.
     FMP is last: its free tier only returns end-of-day data, which is stale for
-    live portfolio quotes.  If Yahoo is blocked/unavailable the request silently
-    falls through to the feeds, so being first resort never produces a blank result.
-    Grains (display multiplier != 1) keep the LSE per-tonne conversion path.
+    live portfolio quotes.
 
     After a successful stock lookup, sector, exchange, and description are enriched
     from Yahoo Finance v1 search / quoteSummary (or FMP if a key is configured).
@@ -836,9 +837,9 @@ def lookup(symbol):
     is_fut = _is_futures(symbol)
     providers = [
         ("Yahoo Futures", _lookup_yahoo_futures) if is_fut else ("Yahoo", _lookup_yahoo_quote),
+        ("yfinance", _lookup_yfinance),
         ("Twelve Data", _lookup_twelvedata),
         ("London Strategic Edge", _lookup_lse),
-        ("yfinance", _lookup_yfinance),
         ("FMP", _lookup_fmp),
     ]
 

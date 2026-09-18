@@ -7,9 +7,10 @@ import helpers
 
 class ProviderTests(unittest.TestCase):
     def test_lookup_falls_back_to_twelve_data_for_stocks(self):
-        """Yahoo is first for stocks; Twelve Data is the next fallback when Yahoo is down."""
+        """Yahoo leads for stocks; if both Yahoo means fail, Twelve Data answers."""
         twelve_quote = {"symbol": "AAPL", "price": 200}
         with patch.object(helpers, "_lookup_yahoo_quote", return_value=None), \
+                patch.object(helpers, "_lookup_yfinance", return_value=None), \
                 patch.object(helpers, "_lookup_twelvedata", return_value=twelve_quote) as twelve, \
                 patch.object(helpers, "_lookup_fmp") as fmp:
             self.assertEqual(helpers.lookup("aapl"), twelve_quote)
@@ -19,6 +20,7 @@ class ProviderTests(unittest.TestCase):
     def test_lookup_prefers_twelve_data_for_live_prices(self):
         twelve_quote = {"symbol": "AAPL", "price": 200}
         with patch.object(helpers, "_lookup_yahoo_quote", return_value=None), \
+                patch.object(helpers, "_lookup_yfinance", return_value=None), \
                 patch.object(helpers, "_lookup_twelvedata", return_value=twelve_quote) as twelve, \
                 patch.object(helpers, "_lookup_lse") as lse:
             self.assertEqual(helpers.lookup("AAPL"), twelve_quote)
@@ -28,6 +30,7 @@ class ProviderTests(unittest.TestCase):
     def test_lookup_falls_back_to_twelve_data_for_brent(self):
         twelve_quote = {"symbol": "BZ=F", "price": 97.25}
         with patch.object(helpers, "_lookup_yahoo_futures", return_value=None), \
+                patch.object(helpers, "_lookup_yfinance", return_value=None), \
                 patch.object(helpers, "_lookup_twelvedata", return_value=twelve_quote):
             self.assertEqual(helpers.lookup("BZ=F")["price"], 97.25)
 
@@ -35,10 +38,11 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(helpers._fallback_exchange("BZ=F"), "ICE")
 
     def test_twelve_data_precedes_lse_for_stocks(self):
-        """Within the stock fallback chain, Twelve Data is tried before LSE once Yahoo is down."""
+        """Within the stock fallback chain, Twelve Data is tried before LSE once Yahoo and yfinance are down."""
         twelve_quote = {"symbol": "AAPL", "price": 200, "sector": "Technology",
                         "exchange": "NASDAQ", "description": "Apple Inc."}
         with patch.object(helpers, "_lookup_yahoo_quote", return_value=None), \
+                patch.object(helpers, "_lookup_yfinance", return_value=None), \
                 patch.object(helpers, "_lookup_lse") as lse, \
                 patch.object(helpers, "_lookup_twelvedata", return_value=twelve_quote), \
                 patch.object(helpers, "_enrich_stock_metadata"):
@@ -48,7 +52,9 @@ class ProviderTests(unittest.TestCase):
 
     def test_lookup_converts_lse_soybean_units(self):
         lse_quote = {"symbol": "SOYBN/USD", "price": 12.964, "price_7d": 13.1, "price_30d": 13.2}
-        with patch.object(helpers, "_lookup_lse", return_value=lse_quote), \
+        with patch.object(helpers, "_lookup_yahoo_futures", return_value=None), \
+                patch.object(helpers, "_lookup_yfinance", return_value=None), \
+                patch.object(helpers, "_lookup_lse", return_value=lse_quote), \
                 patch.object(helpers, "_twelvedata_quote", return_value=None):
             quote = helpers.lookup("ZS=F")
         self.assertEqual(quote["price"], 1296.4)
@@ -93,9 +99,10 @@ class ProviderTests(unittest.TestCase):
         lse.assert_not_called()
 
     def test_lse_precedes_twelve_data_for_futures(self):
-        """LSE should be tried before FMP/yfinance once Twelve Data is down."""
+        """LSE should be tried before FMP once the earlier providers are down."""
         lse_quote = {"symbol": "BZ=F", "price": 97.10, "price_7d": 96.5, "price_30d": 95.0}
         with patch.object(helpers, "_lookup_yahoo_futures", return_value=None), \
+                patch.object(helpers, "_lookup_yfinance", return_value=None), \
                 patch.object(helpers, "_lookup_lse", return_value=lse_quote) as lse, \
                 patch.object(helpers, "_lookup_twelvedata", return_value=None) as twelve:
             quote = helpers.lookup("BZ=F")
@@ -157,6 +164,7 @@ class ProviderTests(unittest.TestCase):
         lse_quote = {"symbol": "AAPL", "price": 200, "sector": "",
                      "exchange": "London Strategic Edge", "description": "No description available."}
         with patch.object(helpers, "_lookup_yahoo_quote", return_value=None), \
+                patch.object(helpers, "_lookup_yfinance", return_value=None), \
                 patch.object(helpers, "_lookup_twelvedata", return_value=None), \
                 patch.object(helpers, "_lookup_lse", return_value=lse_quote), \
                 patch.object(helpers, "_enrich_stock_metadata"):
