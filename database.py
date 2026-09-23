@@ -72,6 +72,11 @@ class SQL:
                         PRIMARY KEY (user_id, date),
                         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
                     );
+                    ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+                    ALTER TABLE portfolio ENABLE ROW LEVEL SECURITY;
+                    ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
+                    ALTER TABLE ai_analysis ENABLE ROW LEVEL SECURITY;
+                    ALTER TABLE account_history ENABLE ROW LEVEL SECURITY;
                 """))
             print("[SQLAlchemy] PostgreSQL database schema verified/initialized successfully.")
         except Exception as e:
